@@ -1,0 +1,24 @@
+# binmania.startwithdata.com. The shared nginx on the server (the zpl_designer
+# project) handles https and proxies to this container over its Docker network.
+# Its server blocks are in deploy/nginx.conf.
+services:
+  app:
+    build: .
+    container_name: binmania-loyalty
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: uniquelocal
+    expose:
+      - "4090"
+    volumes:
+      - binmania_data:/app/data
+    networks:
+      - shared
+
+volumes:
+  binmania_data:
+
+networks:
+  shared:
+    external: true
+    name: zpl_designer_default

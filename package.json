@@ -1,0 +1,18 @@
+{
+  "name": "binmania-loyalty",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bin Mania membership prototype: sign-up, demo payments, selfie, rotating QR card, offers feed and billing.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch-path=server.js --watch-path=lib server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  }
+}

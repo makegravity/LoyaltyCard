@@ -1,0 +1,5 @@
+node_modules/
+# Members, selfies, the admin login and the signing secret live here.
+data/
+*.log
+.env
