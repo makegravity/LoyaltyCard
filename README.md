@@ -98,7 +98,7 @@ Changing the fee applies to new members. Current members keep the price they joi
 
 https://binmania.startwithdata.com runs on the shared internal-tools server, next to the other startwithdata.com apps:
 
-- The app is the `binmania-loyalty` container, built from `/opt/binmania-loyalty` with `docker-compose.yml`. Its data is in the `binmania_data` Docker volume, so rebuilding keeps every member and photo.
+- The app is the `binmania-loyalty` container, built from `/opt/binmania-loyalty` with `docker-compose.yml`. Its data is in the `binmania-loyalty_binmania_data` Docker volume, so rebuilding keeps every member and photo.
 - The shared nginx (`/home/zpl_designer`) handles https and proxies to the container. Its server blocks are in `deploy/nginx.conf`, and the certbot container renews the certificate.
 
 To ship a new version, from this folder on a PC with the server's SSH key:
