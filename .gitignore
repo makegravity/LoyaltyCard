@@ -1,5 +1,9 @@
 node_modules/
-# Members, selfies, the admin login and the signing secret live here.
+# The local admin login, and the JSON prototype's data if you still have it.
 data/
 *.log
 .env
+backups/
+import/
+# Server credentials (never commit)
+Loyalty Card .txt

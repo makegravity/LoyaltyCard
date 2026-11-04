@@ -3,3 +3,6 @@ data
 .git
 *.log
 .env
+backups
+import
+deploy

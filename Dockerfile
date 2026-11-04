@@ -1,17 +1,17 @@
 FROM node:22-alpine
 WORKDIR /app
+ENV NODE_ENV=production
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server.js ./
 COPY lib ./lib
+COPY scripts ./scripts
 COPY public ./public
 
-# Members, selfies, the admin login and the signing key live in /app/data (a volume).
-RUN mkdir -p /app/data && chown node:node /app/data
+# Everything lives in MySQL, so the app writes nothing to disk and can run read-only.
 USER node
-
-ENV NODE_ENV=production PORT=4090 HOST=0.0.0.0 DATA_DIR=/app/data
+ENV PORT=4090 HOST=0.0.0.0
 EXPOSE 4090
 CMD ["node", "server.js"]

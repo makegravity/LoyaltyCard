@@ -1,7 +1,8 @@
-// Router and app shell (top bar + side menu). Pages live in member.js and admin.js.
+// Router and app shell (top bar + side menu). Pages live in member.js, admin.js and account.js.
 import { api, esc, icon, initials, logo } from './lib.js';
 import * as member from './member.js';
 import * as admin from './admin.js';
+import * as account from './account.js';
 
 const app = document.getElementById('app');
 const state = { config: null, me: null, offers: [] };
@@ -15,9 +16,14 @@ const MEMBER_NAV = [
 const ADMIN_NAV = [
   { route: 'admin/offers', label: 'Offers', icon: 'megaphone' },
   { route: 'admin/members', label: 'Members', icon: 'users' },
-  { route: 'admin/verify', label: 'Check a code', icon: 'scan' },
+  { route: 'scan', label: 'Check a code', icon: 'scan' },
+  { route: 'admin/staff', label: 'Staff', icon: 'badge' },
   { route: 'admin/settings', label: 'Settings', icon: 'sliders' },
 ];
+// Cashiers only check membership cards.
+const CASHIER_NAV = [{ route: 'scan', label: 'Scan cards', icon: 'scan' }];
+const NAV = { member: MEMBER_NAV, admin: ADMIN_NAV, cashier: CASHIER_NAV };
+const ROLE_TAG = { admin: 'Admin', cashier: 'Cashier' };
 
 const ROUTES = {
   '': { view: member.landing, access: 'guest' },
@@ -30,16 +36,22 @@ const ROUTES = {
   billing: { view: member.billing, access: 'member' },
   'admin/offers': { view: admin.offers, access: 'admin' },
   'admin/members': { view: admin.members, access: 'admin' },
-  'admin/verify': { view: admin.verify, access: 'admin' },
+  'admin/staff': { view: admin.staff, access: 'admin' },
   'admin/settings': { view: admin.settings, access: 'admin' },
+  scan: { view: admin.verify, access: 'staff' },
+  password: { view: account.password, access: 'account' },
 };
 
 const isActive = (me) => me && ['active', 'canceling'].includes(me.status);
+const isStaff = (me) => me && (me.role === 'admin' || me.role === 'cashier');
 
-// Where a signed-in person belongs: sign-up steps first, then their card.
+// Where a signed-in person belongs: a new password for staff given a temporary one,
+// sign-up steps for members, then their main page.
 function homeFor(me) {
   if (!me) return '';
+  if (me.mustChangePassword) return 'password';
   if (me.role === 'admin') return 'admin/offers';
+  if (me.role === 'cashier') return 'scan';
   if (me.status === 'none') return 'join';
   if (isActive(me) && !me.selfieUrl) return 'selfie';
   return 'card';
@@ -49,11 +61,16 @@ function guard(name) {
   const def = ROUTES[name];
   const me = state.me;
   if (!def) return homeFor(me);
+  if (me && me.mustChangePassword && name !== 'password') return 'password';
   switch (def.access) {
     case 'guest':
       return me ? homeFor(me) : name;
+    case 'account':
+      return me ? name : 'login';
     case 'admin':
       return me && me.role === 'admin' ? name : me ? homeFor(me) : 'login';
+    case 'staff':
+      return isStaff(me) ? name : me ? homeFor(me) : 'login';
     case 'join':
       if (!me) return 'login';
       return me.role === 'member' && !isActive(me) ? name : homeFor(me);
@@ -134,10 +151,10 @@ function bare(cls = '') {
 // Page inside the app: top bar, side menu, and a <main> the page fills.
 function shell({ wide = false } = {}) {
   const me = state.me;
-  const isAdmin = me.role === 'admin';
-  const nav = isAdmin ? ADMIN_NAV : MEMBER_NAV;
+  const staff = isStaff(me);
+  const nav = NAV[me.role];
   const route = currentRoute();
-  const unseen = isAdmin ? 0 : unseenOffers();
+  const unseen = staff ? 0 : unseenOffers();
   const photo = me.selfieUrl ? `<img src="${esc(me.selfieUrl)}" alt="">` : esc(initials(me.name));
 
   app.innerHTML = `
@@ -145,16 +162,16 @@ function shell({ wide = false } = {}) {
       <button class="icon-btn" type="button" data-open-menu aria-label="Open menu" aria-controls="drawer" aria-expanded="false">
         ${icon('menu')}${unseen ? '<i class="dot" aria-hidden="true"></i>' : ''}
       </button>
-      <a class="topbar-logo" href="#/${homeFor(me)}" aria-label="Bin Mania home">${logo()}${isAdmin ? '<span class="admin-tag">Admin</span>' : ''}</a>
-      ${isAdmin ? '<span></span>' : `<a class="avatar" href="#/card" aria-label="My Membership">${photo}</a>`}
+      <a class="topbar-logo" href="#/${homeFor(me)}" aria-label="Bin Mania home">${logo()}${staff ? `<span class="admin-tag">${ROLE_TAG[me.role]}</span>` : ''}</a>
+      ${staff ? '<span></span>' : `<a class="avatar" href="#/card" aria-label="My Membership">${photo}</a>`}
     </header>
     <div class="scrim" data-close-menu hidden></div>
     <nav class="drawer" id="drawer" aria-label="Main menu" inert>
       <div class="drawer-head">
         <button class="icon-btn light" type="button" data-close-menu aria-label="Close menu">${icon('close')}</button>
-        <div class="drawer-photo">${isAdmin ? esc(initials(me.name)) : photo}</div>
+        <div class="drawer-photo">${staff ? esc(initials(me.name)) : photo}</div>
         <div class="drawer-name">${esc(me.name)}</div>
-        <div class="drawer-sub">${isAdmin ? esc(me.email) : `Member #${esc(me.memberNumber)}`}</div>
+        <div class="drawer-sub">${staff ? esc(me.email) : `Member #${esc(me.memberNumber)}`}</div>
       </div>
       <ul class="drawer-nav">
         ${nav
@@ -166,6 +183,7 @@ function shell({ wide = false } = {}) {
           .join('')}
       </ul>
       <div class="drawer-foot">
+        <a class="drawer-signout ${route === 'password' ? 'active' : ''}" href="#/password">${icon('key')}Change password</a>
         <button class="drawer-signout" type="button" data-signout>${icon('logout')}Sign out</button>
         ${state.config.demoMode ? '<span class="demo-pill">Prototype · demo payments</span>' : ''}
       </div>
@@ -234,6 +252,10 @@ async function render() {
     if (err.status === 401) {
       state.me = null;
       return go('login');
+    }
+    if (err.status === 403 && err.data && err.data.reason === 'password') {
+      await refreshMe().catch(() => {});
+      return go('password');
     }
     const main = app.querySelector('#main') || bare();
     main.innerHTML = `<div class="card empty">${icon('wifiOff')}<h2>Something went wrong</h2><p>${esc(err.message)}</p>

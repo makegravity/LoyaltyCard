@@ -1,4 +1,4 @@
-// Admin pages: post offers, see members, check a member code, and program settings.
+// Admin pages: post offers, see members, check a member code (cashiers too), staff, and program settings.
 import {
   $,
   api,
@@ -145,7 +145,7 @@ function memberRow(m) {
         ${m.priceCents != null ? `<div><dt>Plan</dt><dd>${money(m.priceCents)} / month</dd></div>` : ''}
         ${m.currentPeriodEnd ? `<div><dt>${ends}</dt><dd>${fmtDate(m.currentPeriodEnd)}</dd></div>` : ''}
         ${m.card ? `<div><dt>Card</dt><dd>${esc(m.card)}</dd></div>` : ''}
-        <div><dt>Last scanned</dt><dd>${m.lastScanAt ? esc(fmtDateTime(m.lastScanAt)) : 'Never'}</dd></div>
+        <div><dt>Last scanned</dt><dd>${m.lastScanAt ? esc(fmtDateTime(m.lastScanAt)) + (m.lastScannedBy ? ` · ${esc(m.lastScannedBy)}` : '') : 'Never'}</dd></div>
       </dl>
       ${m.selfieUrl ? '<button type="button" class="btn btn-secondary btn-sm" data-reset-selfie>Ask for a new selfie</button>' : ''}
     </div>
@@ -235,11 +235,17 @@ function verdictHtml(r) {
     <p style="margin-top:6px">${esc(r.message)}</p>${who}</section>`;
 }
 
+// Cashiers and admins both use this page; cashiers see nothing else.
 export function verify(ctx) {
+  const cashier = ctx.state.me.role === 'cashier';
   const main = ctx.shell();
   main.innerHTML = `
-    <h1 class="page-title">Check a code</h1>
-    <p class="page-sub">Try a member's card the way the register will. Each code works once.</p>
+    <h1 class="page-title">${cashier ? 'Scan a membership card' : 'Check a code'}</h1>
+    <p class="page-sub">${
+      cashier
+        ? "Scan the code on the member's phone, then check their photo matches them. Each code works once."
+        : "Try a member's card the way the register will. Each code works once."
+    }</p>
     <section class="card">
       <div id="scan-area"></div>
       <form id="code-form" novalidate>
@@ -262,7 +268,7 @@ export function verify(ctx) {
     const btn = $('[type=submit]', form);
     setBusy(btn, true, 'Checking…');
     try {
-      const r = await api('/api/admin/verify', { method: 'POST', body: { code } });
+      const r = await api('/api/staff/verify', { method: 'POST', body: { code } });
       result.innerHTML = verdictHtml(r);
       navigator.vibrate?.(r.valid ? 60 : [60, 60, 60]);
       result.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -341,7 +347,197 @@ export function verify(ctx) {
   return stopCamera;
 }
 
+// ---------- Shown-once secrets ----------
+
+// A new password or POS key, with copy buttons. Only a hash is kept, so it is never shown again.
+function secretHtml(title, note, rows) {
+  return `<section class="card secret" role="status" tabindex="-1">
+    <h2>${icon('key')}${esc(title)}</h2>
+    <p class="muted small">${esc(note)}</p>
+    ${rows
+      .map(
+        ([label, value]) => `<div class="field"><label>${esc(label)}</label>
+      <div class="secret-row"><div class="code-box">${esc(value)}</div>
+      <button type="button" class="btn btn-secondary btn-sm" data-copy="${esc(value)}" aria-label="Copy ${esc(label.toLowerCase())}">${icon('copy')}Copy</button></div></div>`
+      )
+      .join('')}
+    <button type="button" class="btn btn-primary btn-block" data-done>Done</button>
+  </section>`;
+}
+
+function showSecret(box, html) {
+  box.innerHTML = html;
+  const card = box.firstElementChild;
+  card.addEventListener('click', async (e) => {
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+      try {
+        await navigator.clipboard.writeText(copy.dataset.copy);
+        toast('Copied', 'ok');
+      } catch {
+        toast('Press and hold the text to copy it', 'bad');
+      }
+    }
+    if (e.target.closest('[data-done]')) box.innerHTML = '';
+  });
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  card.focus({ preventScroll: true });
+}
+
+// ---------- Staff ----------
+
+const ROLE_LABEL = { admin: 'Admin', cashier: 'Cashier' };
+
+function staffRow(s, meId) {
+  const self = s.id === meId;
+  const seen = s.lastLoginAt ? `Last signed in ${timeAgo(s.lastLoginAt).replace(/^Just/, 'just')}` : 'Not signed in yet';
+  return `<article class="card staff-row" data-id="${esc(s.id)}">
+    <div class="staff-top">
+      <span class="member-thumb">${esc(initials(s.name))}</span>
+      <span class="member-main"><strong>${esc(s.name)}${self ? ' (you)' : ''}</strong><span>${esc(s.email)}</span></span>
+      <span class="chip role-${esc(s.role)}">${ROLE_LABEL[s.role]}</span>
+    </div>
+    <p class="muted small staff-meta">${esc(seen)}${s.mustChangePassword ? ' · has a temporary password' : ''}</p>
+    ${
+      self
+        ? ''
+        : `<div class="staff-actions">
+      <button type="button" class="btn btn-secondary btn-sm" data-reset>${icon('key')}New password</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-remove>${icon('trash')}Remove</button></div>`
+    }
+  </article>`;
+}
+
+export async function staff(ctx) {
+  const meId = ctx.state.me.id;
+  const main = ctx.shell();
+  main.innerHTML = `
+    <h1 class="page-title">Staff</h1>
+    <p class="page-sub">Cashiers can only scan membership cards. Admins can do everything, including adding staff.</p>
+    <div id="secret"></div>
+    <form class="card" id="add" novalidate>
+      <h2>Add someone</h2>
+      <div class="field" style="margin-top:12px"><label for="s-name">Name</label>
+        <input id="s-name" maxlength="60" autocomplete="off" autocapitalize="words"></div>
+      <div class="field"><label for="s-email">Email</label>
+        <input id="s-email" type="email" maxlength="120" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <fieldset class="role-pick">
+        <legend>Role</legend>
+        <label class="role-option"><input type="radio" name="role" value="cashier" checked>
+          <span><strong>Cashier</strong><span>Scans membership cards. Nothing else.</span></span></label>
+        <label class="role-option"><input type="radio" name="role" value="admin">
+          <span><strong>Admin</strong><span>Offers, members, settings and staff.</span></span></label>
+      </fieldset>
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">${icon('userPlus')}Add and make a password</button>
+    </form>
+    <p class="section-label">Team</p>
+    <div class="member-list" id="list"><div class="card"><p class="muted">Loading…</p></div></div>`;
+
+  const form = $('#add', main);
+  const list = $('#list', main);
+  const secretBox = $('#secret', main);
+  let people = [];
+
+  const draw = () => {
+    list.innerHTML = people.map((s) => staffRow(s, meId)).join('');
+  };
+  const reveal = (person, password, isNew) => {
+    const first = person.name.split(' ')[0];
+    showSecret(
+      secretBox,
+      secretHtml(
+        isNew ? `${first} is added` : `New password for ${first}`,
+        `Give ${first} these details. They choose their own password when they sign in. This password isn't shown again.`,
+        [
+          ['Sign in at', location.origin],
+          ['Email', person.email],
+          ['Temporary password', password],
+        ]
+      )
+    );
+  };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    showError(form, '');
+    const body = {
+      name: $('#s-name', form).value.trim(),
+      email: $('#s-email', form).value.trim(),
+      role: form.querySelector('[name=role]:checked').value,
+    };
+    if (!body.name) return showError(form, 'Enter their name.');
+    if (!body.email) return showError(form, 'Enter their email.');
+    const btn = $('[type=submit]', form);
+    setBusy(btn, true, 'Adding…');
+    try {
+      const r = await api('/api/admin/staff', { method: 'POST', body });
+      people.unshift(r.staff);
+      draw();
+      form.reset();
+      reveal(r.staff, r.password, true);
+    } catch (err) {
+      showError(form, err.message);
+    } finally {
+      setBusy(btn, false);
+    }
+  });
+
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-reset], [data-remove]');
+    if (!btn) return;
+    const person = people.find((p) => p.id === btn.closest('[data-id]').dataset.id);
+    if (btn.hasAttribute('data-reset')) {
+      const ok = await confirmSheet({
+        title: `Make a new password for ${person.name}?`,
+        body: 'Their current password stops working and they are signed out everywhere.',
+        confirmLabel: 'Make new password',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const r = await api(`/api/admin/staff/${encodeURIComponent(person.id)}/password`, { method: 'POST' });
+        Object.assign(person, r.staff);
+        draw();
+        reveal(person, r.password, false);
+      } catch (err) {
+        toast(err.message, 'bad');
+      }
+      return;
+    }
+    const ok = await confirmSheet({
+      title: `Remove ${person.name}?`,
+      body: "They're signed out right away and can't sign in again.",
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/admin/staff/${encodeURIComponent(person.id)}`, { method: 'DELETE' });
+      people = people.filter((p) => p.id !== person.id);
+      draw();
+      toast(`${person.name} removed`);
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  });
+
+  people = (await api('/api/admin/staff')).staff;
+  if (!ctx.isCurrent()) return;
+  draw();
+}
+
 // ---------- Settings ----------
+
+function posKeyLine(s) {
+  return s.posKeyHint ? `X-POS-Key: pos_…${s.posKeyHint}` : 'X-POS-Key: (no key yet)';
+}
+
+function posKeyNote(s) {
+  return s.posKeyHint
+    ? `Key made ${fmtDate(s.posKeyCreatedAt)}. Keys are shown once, when made. If the POS loses it, make a new one.`
+    : 'Make a key when the POS is ready. Until then, the POS connection is off.';
+}
 
 export async function settings(ctx) {
   const main = ctx.shell();
@@ -387,9 +583,11 @@ export async function settings(ctx) {
     <section class="card">
       <p class="muted small">When the POS is ready, it sends each scanned code here and gets back the member's name, status and photo.</p>
       <div class="field" style="margin-top:14px"><label>Endpoint</label><div class="code-box">POST ${esc(origin)}/api/pos/verify</div></div>
-      <div class="field"><label>Header</label><div class="code-box" id="pos-key">X-POS-Key: ${esc(s.posApiKey)}</div></div>
+      <div class="field"><label>Header</label><div class="code-box" id="pos-key">${esc(posKeyLine(s))}</div>
+        <span class="hint" id="pos-note">${esc(posKeyNote(s))}</span></div>
       <div class="field"><label>Body</label><div class="code-box">{ "code": "BM1.100001.…" }</div></div>
-      <button type="button" class="btn btn-secondary btn-sm" data-new-key>Make a new key</button>
+      <div id="pos-secret"></div>
+      <button type="button" class="btn btn-secondary btn-sm" data-new-key>${s.posKeyHint ? 'Make a new key' : 'Make a key'}</button>
     </section>`;
 
   $('#demo', box).addEventListener('change', async (e) => {
@@ -435,16 +633,29 @@ export async function settings(ctx) {
     }
   });
 
-  $('[data-new-key]', box).addEventListener('click', async () => {
-    const ok = await confirmSheet({
-      title: 'Make a new POS key?',
-      body: 'The old key stops working right away. Any register using it needs the new one.',
-      confirmLabel: 'Make new key',
-      danger: true,
-    });
-    if (!ok) return;
-    s = (await api('/api/admin/settings/pos-key', { method: 'POST' })).settings;
-    $('#pos-key', box).textContent = `X-POS-Key: ${s.posApiKey}`;
-    toast('New key made');
+  $('[data-new-key]', box).addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (s.posKeyHint) {
+      const ok = await confirmSheet({
+        title: 'Make a new POS key?',
+        body: 'The old key stops working right away. Any register using it needs the new one.',
+        confirmLabel: 'Make new key',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    try {
+      const r = await api('/api/admin/settings/pos-key', { method: 'POST' });
+      s = r.settings;
+      $('#pos-key', box).textContent = posKeyLine(s);
+      $('#pos-note', box).textContent = posKeyNote(s);
+      btn.textContent = 'Make a new key';
+      showSecret(
+        $('#pos-secret', box),
+        secretHtml('Your POS key', "Copy it into the POS now. It isn't shown again.", [['X-POS-Key', r.posKey]])
+      );
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
   });
 }

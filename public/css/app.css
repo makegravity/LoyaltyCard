@@ -705,7 +705,7 @@ p { margin: 0; }
 .stat { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; }
 .stat strong { display: block; font-family: var(--display); font-size: 1.6rem; font-weight: 900; letter-spacing: -0.03em; }
 .stat span { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
-.member-list { display: grid; gap: 10px; }
+.member-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .member { padding: 0; }
 .member summary {
   list-style: none;
@@ -753,6 +753,38 @@ p { margin: 0; }
 .admin-offer img { width: 72px; height: 54px; border-radius: 10px; object-fit: cover; flex: none; }
 .admin-offer .offer-text { font-size: 0.92rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .admin-offer .grow { flex: 1; min-width: 0; }
+
+/* staff */
+.staff-top { display: flex; align-items: center; gap: 12px; }
+.staff-top .member-main span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff-meta { margin-top: 10px; }
+.staff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.staff-actions .icon { width: 17px; height: 17px; }
+.chip.role-admin { background: var(--ink); color: #fff; }
+.chip.role-cashier { background: var(--blue-tint); color: var(--blue-dark); }
+.role-pick { border: 0; padding: 0; margin: 0 0 16px; display: grid; gap: 10px; min-width: 0; }
+.role-pick legend { font-weight: 700; font-size: 0.9rem; color: var(--ink-2); padding: 0; margin-bottom: 6px; }
+.role-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+  cursor: pointer;
+}
+.role-option:has(input:checked) { border-color: var(--blue); background: var(--blue-tint); }
+.role-option input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--blue); flex: none; }
+.role-option strong { display: block; }
+.role-option span span { color: var(--muted); font-size: 0.88rem; }
+.secret { border: 1.5px solid var(--blue); margin-bottom: 14px; }
+.secret h2 { display: flex; align-items: center; gap: 8px; }
+.secret h2 .icon { color: var(--blue); }
+.secret > .muted { margin-bottom: 14px; }
+.secret-row { display: flex; align-items: center; gap: 8px; }
+.secret-row .code-box { flex: 1; min-width: 0; }
+.secret-row .icon { width: 16px; height: 16px; }
+a.drawer-signout { text-decoration: none; }
 
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .toggle-row p { color: var(--muted); font-size: 0.88rem; margin-top: 2px; }

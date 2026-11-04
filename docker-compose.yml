@@ -1,24 +1,126 @@
-# binmania.startwithdata.com. The shared nginx on the server (the zpl_designer
-# project) handles https and proxies to this container over its Docker network.
-# Its server blocks are in deploy/nginx.conf.
+# Production stack for the Bin Mania membership server. Settings and secrets come from
+# .env (copy .env.example). Everything restarts on its own: after a crash, and after the
+# server reboots (Docker starts at boot).
+#
+#   caddy   https on ports 80/443, with a free certificate it gets and renews itself
+#   app     the membership app, reachable only through Caddy
+#   db      MySQL 8.4 on a private network the internet can't reach
+#   backup  a database dump every day into ./backups, kept for BACKUP_KEEP_DAYS days
+name: binmania
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    logging: *logging
+    networks:
+      - web
+
   app:
     build: .
-    container_name: binmania-loyalty
+    restart: unless-stopped
+    init: true
+    # Only what the app needs; the MySQL root password stays out of it.
+    environment:
+      NODE_ENV: production
+      PUBLIC_ORIGIN: https://${SITE_DOMAIN}
+      TRUST_PROXY: uniquelocal
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-binmania}
+      DB_USER: ${DB_USER:-binmania}
+      DB_PASSWORD: ${DB_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4090/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: *logging
+    networks:
+      - web
+      - backend
+
+  db:
+    image: mysql:8.4
     restart: unless-stopped
     environment:
-      TRUST_PROXY: uniquelocal
-    expose:
-      - "4090"
+      MYSQL_DATABASE: ${DB_NAME:-binmania}
+      MYSQL_USER: ${DB_USER:-binmania}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
     volumes:
-      - binmania_data:/app/data
+      - mysql:/var/lib/mysql
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Succeeds once the server answers (a ping needs no password).
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    logging: *logging
     networks:
-      - shared
+      - backend
+
+  backup:
+    image: mysql:8.4
+    restart: unless-stopped
+    entrypoint: ["bash", "/backup.sh"]
+    environment:
+      DB_NAME: ${DB_NAME:-binmania}
+      DB_USER: ${DB_USER:-binmania}
+      MYSQL_PWD: ${DB_PASSWORD}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+    networks:
+      - backend
 
 volumes:
-  binmania_data:
+  mysql:
+  caddy_data:
+  caddy_config:
 
 networks:
-  shared:
-    external: true
-    name: zpl_designer_default
+  web:
+  backend:
+    internal: true

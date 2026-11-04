@@ -9,6 +9,7 @@ import {
   icon,
   logo,
   money,
+  passwordToggle,
   PERSON_SVG,
   photoToDataUrl,
   setBusy,
@@ -97,17 +98,6 @@ export function landing(ctx) {
 }
 
 // ---------- sign in / sign up ----------
-
-function passwordToggle(root) {
-  root.querySelectorAll('[data-toggle-pw]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const input = btn.parentElement.querySelector('input');
-      const show = input.type === 'password';
-      input.type = show ? 'text' : 'password';
-      btn.textContent = show ? 'Hide' : 'Show';
-    });
-  });
-}
 
 export function login(ctx) {
   const main = ctx.bare();

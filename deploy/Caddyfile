@@ -1,0 +1,16 @@
+# https for the membership app. Caddy gets a Let's Encrypt certificate for SITE_DOMAIN
+# on first start (the domain's DNS must point at this server, with ports 80 and 443
+# open), renews it, and sends http to https.
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# Selfies and offer pictures are sent as JSON (the app caps a body at 6 MB).
+	request_body {
+		max_size 10MB
+	}
+
+	header Strict-Transport-Security "max-age=31536000"
+
+	# Caddy replaces any X-Forwarded-For a visitor sends, so the app sees the real address.
+	reverse_proxy app:4090
+}
