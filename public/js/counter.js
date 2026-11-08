@@ -82,7 +82,15 @@ export async function newMember(ctx) {
     e.target.value = '';
     if (!file) return;
     try {
-      photo = await photoToDataUrl(file, { max: 720, square: true });
+      const taken = await photoToDataUrl(file, { max: 720, square: true });
+      pick.innerHTML = `<img src="${taken}" alt=""><span>Checking the photo…</span>`;
+      const { problem } = await api('/api/staff/photo-check', { method: 'POST', body: { photo: taken } });
+      if (problem) {
+        photo = null;
+        pick.innerHTML = `${icon('camera')}<span>Take their photo for the card</span>`;
+        return toast(problem, 'bad');
+      }
+      photo = taken;
       pick.innerHTML = `<img src="${photo}" alt=""><span>Photo added. Tap to retake.</span>`;
     } catch (err) {
       toast(err.message, 'bad');

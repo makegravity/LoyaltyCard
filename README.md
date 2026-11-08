@@ -72,7 +72,7 @@ Anyone signed in can change their password from the menu, which signs them out o
 1. **Sign-up page**: program name, price and perks. With Stripe they come from the plan the super admin chose (product name, price and interval, and the product's features if it lists any); otherwise from Settings.
 2. **Create account**: name, email, optional mobile, password.
 3. **Payment**: Stripe's card form (it runs in Stripe's frame, so card numbers never reach this server; Apple Pay and Google Pay show where available). In demo mode, a card form that pretends to charge. With payments off, sign-up shows "opens soon".
-4. **Selfie**: opens the front camera on phones. The photo is cropped square, shrunk on the phone, and stored in the database.
+4. **Selfie**: opens the front camera on phones. The photo is cropped square, shrunk on the phone, checked for a face on the server, and stored in the database.
 5. **The app**, with a side menu of three pages:
    - **Offers**: the admin's posts, newest first, each with its time. New posts get a badge.
    - **My Membership**: the card with their selfie, member number, status and the rotating QR code.
@@ -160,6 +160,7 @@ The response:
 - **Cross-site requests**: every write must carry this site's own `Origin` (`PUBLIC_ORIGIN` in production), on top of SameSite cookies.
 - **Headers**: a strict Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff`, same-origin opener and resource policies, `no-store` on every API response. HSTS is set by Caddy.
 - **Uploads**: photos are checked to really be JPEG, PNG or WebP, up to 4 MB. Only the upload routes accept bodies over 64 KB.
+- **Card photos** (member selfies and counter photos) must show one clear face: `lib/faces.js` runs the UltraFace detector (`models/`, MIT licence) on the server in about 60–150 ms, and refuses a photo with no face, a face too small to recognise, or a second person just as clear. The counter checks the photo as soon as it's taken. If the detector itself fails, photos are let through and the failure is logged.
 - **Payments**: card details go straight from the browser to Stripe. Stripe keys are encrypted at rest; changing them, the plan or the mode needs a fresh password confirmation. Webhooks are accepted only with a valid Stripe signature, and every event is checked by fetching the subscription from Stripe. Counter sign-up links are single-use 256-bit tokens, stored hashed.
 - **Database**: every change to a member's billing, photo or scans locks their row, so two requests at once can't renew a period twice or accept a code twice. The app's MySQL user needs rights on its own database only.
 - **Audit log**: sign-ins (and failed ones), sign-outs, password changes, staff changes, settings changes, Stripe key, plan and mode changes, sign-ups and payments, counter sign-ups and links, POS keys, offers, selfie resets and every code check (who, what, when, from where) go to the `audit_log` table.

@@ -3,10 +3,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# ONNX Runtime Web ships a build for every browser; Node loads only these three files.
+RUN npm ci --omit=dev && npm cache clean --force \
+  && find node_modules/onnxruntime-web/dist -type f ! -name 'ort.node.min.js' \
+    ! -name 'ort-wasm-simd-threaded.mjs' ! -name 'ort-wasm-simd-threaded.wasm' -delete
 
 COPY server.js ./
 COPY lib ./lib
+COPY models ./models
 COPY scripts ./scripts
 COPY public ./public
 

@@ -11,6 +11,7 @@ const security = require('./lib/security');
 const pass = require('./lib/pass');
 const billing = require('./lib/billing');
 const payments = require('./lib/payments');
+const faces = require('./lib/faces');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT || 4090);
@@ -66,7 +67,7 @@ app.use('/api', (req, res, next) => {
 app.use(sameOriginWrites);
 // Photos are sent as data: URLs, so only the upload routes accept large bodies. Stripe
 // webhooks are read raw, because their signature covers the exact bytes.
-const LARGE_BODY_PATHS = new Set(['/api/me/selfie', '/api/admin/offers', '/api/staff/members']);
+const LARGE_BODY_PATHS = new Set(['/api/me/selfie', '/api/admin/offers', '/api/staff/members', '/api/staff/photo-check']);
 const jsonSmall = express.json({ limit: '64kb' });
 const jsonLarge = express.json({ limit: '6mb' });
 const rawWebhook = express.raw({ type: '*/*', limit: '1mb' });
@@ -367,6 +368,18 @@ function decodeImage(dataUrl) {
   if (buf.subarray(0, 8).equals(PNG_SIGNATURE)) return { buf, mime: 'image/png' };
   if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return { buf, mime: 'image/webp' };
   return null;
+}
+
+// A card photo must show one clear face (lib/faces.js). Returns why not, or null. If the
+// detector itself fails, the photo is let through and the failure logged, so sign-ups
+// never stall on it.
+async function faceProblem(img) {
+  try {
+    return await faces.photoProblem(img.buf, img.mime);
+  } catch (err) {
+    console.error(`Face check failed: ${err.message}`);
+    return null;
+  }
 }
 
 function sendImage(res, image, { maxAge, crossOrigin = false }) {
@@ -701,6 +714,8 @@ app.post('/api/me/subscribe/confirm', requireMember, h(async (req, res) => {
 app.post('/api/me/selfie', requireMember, h(async (req, res) => {
   const img = decodeImage(req.body.image);
   if (!img) return fail(res, 400, 'Please take a photo (JPEG or PNG, under 4 MB).');
+  const problem = await faceProblem(img);
+  if (problem) return fail(res, 400, problem, { reason: 'face' });
   const user = await withUserLock(req.user.id, async (u, conn) => {
     if (u.selfie) return null;
     await saveSelfie(u, img, conn);
@@ -943,6 +958,8 @@ app.post('/api/staff/members', requireStaff, h(async (req, res) => {
   if (req.body.photo) {
     img = decodeImage(req.body.photo);
     if (!img) return fail(res, 400, 'That photo could not be used. Take it again.');
+    const problem = await faceProblem(img);
+    if (problem) return fail(res, 400, problem, { reason: 'face' });
   }
   const taken = 'That email already has an account. They can sign in on their phone to see their card, or rejoin from Billing.';
   let user = await data.userByEmail(email);
@@ -989,6 +1006,12 @@ app.post('/api/staff/members', requireStaff, h(async (req, res) => {
   const synced = await payments.sync(r.user);
   await subscribedAudit(req, synced, plan, mode);
   res.json({ member: counterView(synced, mode) });
+}));
+
+// Checks a photo the moment staff take it, before the customer pays.
+app.post('/api/staff/photo-check', requireStaff, h(async (req, res) => {
+  const img = decodeImage(req.body.photo);
+  res.json({ problem: img ? await faceProblem(img) : 'That photo could not be used. Take it again.' });
 }));
 
 async function pendingMember(req, res) {
@@ -1415,6 +1438,8 @@ async function main() {
   security.init({ mediaSecret: settings.mediaSecret, secretsKey, secure: COOKIE_SECURE });
   DUMMY_HASH = await security.hashPassword(security.randomId());
   await ensureSuperAdmin();
+  // Load the face detector now, so the first selfie isn't slow.
+  faces.warmUp().catch((err) => console.error(`Face detector didn't load: ${err.message}`));
 
   const server = app.listen(PORT, HOST, () => {
     console.log(`Bin Mania membership${PROD ? '' : ' (development)'}: http://localhost:${PORT}`);

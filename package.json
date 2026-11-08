@@ -14,7 +14,10 @@
   },
   "dependencies": {
     "express": "^4.21.2",
+    "jpeg-js": "0.4.4",
     "mysql2": "^3.24.6",
+    "onnxruntime-web": "1.30.0",
+    "pngjs": "7.0.0",
     "qrcode": "^1.5.4",
     "stripe": "23.0.1"
   }
