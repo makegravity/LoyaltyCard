@@ -44,11 +44,27 @@ function keysForm(mode, v, replacing) {
   </form>`;
 }
 
-function accountHtml(mode, v) {
+const TAB_LABEL = { sandbox: 'Sandbox', live: 'Live (production)' };
+
+// Sandbox and live each get a tab: its name, whether it's the mode in use, and how far its
+// setup has got.
+function tabsHtml(v, active) {
+  return `<div class="tabs" role="tablist" aria-label="Stripe accounts">${['sandbox', 'live']
+    .map((m) => {
+      const a = v.accounts[m];
+      const state = !a ? ['No keys', 'none'] : a.plan && a.plan.active ? ['Ready', 'active'] : ['No plan yet', 'canceling'];
+      return `<button type="button" role="tab" class="tab" id="tab-${m}" data-tab="${m}" aria-controls="panel-${m}"
+          aria-selected="${m === active}" tabindex="${m === active ? 0 : -1}">
+        <span>${TAB_LABEL[m]}</span><small class="tab-state ${state[1]}">${v.mode === m ? 'In use · ' : ''}${state[0]}</small></button>`;
+    })
+    .join('')}</div>`;
+}
+
+function accountHtml(mode, v, shown) {
   const a = v.accounts[mode];
-  const head = `<p class="section-label">Stripe ${LABEL[mode].toLowerCase()}</p>`;
-  if (!a) return `${head}<section class="card" data-acct="${mode}">${keysForm(mode, v, false)}</section>`;
-  return `${head}<section class="card" data-acct="${mode}">
+  const panel = `class="card tab-panel" id="panel-${mode}" role="tabpanel" aria-labelledby="tab-${mode}" data-acct="${mode}" ${shown ? '' : 'hidden'}`;
+  if (!a) return `<section ${panel}>${keysForm(mode, v, false)}</section>`;
+  return `<section ${panel}>
     <div class="status-line"><span class="chip active">Connected</span><span class="muted small">${esc(a.accountName || a.accountId)}</span></div>
     <dl class="kv">
       <div><dt>Publishable key</dt><dd>${esc(a.publishableKey.slice(0, 8))}…${esc(a.publishableKey.slice(-6))}</dd></div>
@@ -91,6 +107,19 @@ export async function payments(ctx) {
   if (!ctx.isCurrent()) return;
   const box = $('#payments', main);
   let lockTimer = null;
+  // The open tab; it opens on live once live is the mode in use.
+  let tab = v.mode === 'live' ? 'live' : 'sandbox';
+
+  function selectTab(mode, focus = false) {
+    tab = mode;
+    box.querySelectorAll('[role=tab]').forEach((t) => {
+      const on = t.dataset.tab === mode;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      if (on && focus) t.focus();
+    });
+    box.querySelectorAll('[role=tabpanel]').forEach((p) => (p.hidden = p.dataset.acct !== mode));
+  }
 
   function draw() {
     const unlocked = v.unlockedUntil && Date.parse(v.unlockedUntil) > Date.now();
@@ -116,8 +145,10 @@ export async function payments(ctx) {
         <p class="form-error" role="alert" hidden></p>
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:12px">Save payment mode</button>
       </form>
-      ${accountHtml('sandbox', v)}
-      ${accountHtml('live', v)}`;
+      <p class="section-label">Stripe keys and plan</p>
+      ${tabsHtml(v, tab)}
+      ${accountHtml('sandbox', v, tab === 'sandbox')}
+      ${accountHtml('live', v, tab === 'live')}`;
     clearTimeout(lockTimer);
     if (unlocked) lockTimer = setTimeout(() => ctx.isCurrent() && draw(), Date.parse(v.unlockedUntil) - Date.now() + 500);
   }
@@ -223,7 +254,17 @@ export async function payments(ctx) {
     }
   });
 
+  // Arrow keys move between the tabs, as in any tab list.
+  box.addEventListener('keydown', (e) => {
+    const t = e.target.closest('[role=tab]');
+    if (!t || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    selectTab(t.dataset.tab === 'sandbox' ? 'live' : 'sandbox', true);
+  });
+
   box.addEventListener('click', async (e) => {
+    const tabBtn = e.target.closest('[data-tab]');
+    if (tabBtn) return selectTab(tabBtn.dataset.tab);
     const el = e.target.closest('[data-pick], [data-refresh], [data-replace], [data-remove]');
     if (!el) return;
     if (el.dataset.replace) {
@@ -362,7 +403,7 @@ export function guide(ctx) {
     <section class="card guide">
       <h2>4. Save the keys</h2>
       <ol>
-        <li>Paste the publishable and secret keys into <b>Stripe sandbox</b> (or <b>Stripe live</b>) on Payments.</li>
+        <li>On Payments, open the <b>Sandbox</b> tab (or <b>Live (production)</b>) and paste the publishable and secret keys.</li>
         <li>Leave <b>Webhook signing secret</b> empty: the app sets up its own webhook in Stripe at <code>${esc(origin)}/api/stripe/webhook/sandbox</code> (or <code>/live</code>). Stripe uses it to report renewals, failed payments, cancellations and plan changes.</li>
         <li>Press <b>Check and save keys</b>. The app checks them with Stripe first; the section then shows <b>Connected</b>.</li>
       </ol>

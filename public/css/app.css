@@ -949,3 +949,27 @@ a.drawer-signout { text-decoration: none; }
   .guide-table td:first-child { font-weight: 800; color: var(--ink); }
   .guide-table td + td::before { content: attr(data-label) ": "; font-weight: 700; color: var(--muted); }
 }
+
+/* Sandbox / Live tabs on Payments */
+.tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; background: #e3e8ee; border-radius: 16px; }
+.tab {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  color: var(--ink-2);
+  cursor: pointer;
+  text-align: center;
+}
+.tab[aria-selected="true"] { background: #fff; color: var(--blue-dark); box-shadow: var(--shadow-sm); }
+.tab:focus-visible { outline: 3px solid var(--blue-bright); outline-offset: 2px; }
+.tab-state { font-size: 0.74rem; font-weight: 700; color: var(--muted); }
+.tab-state.active { color: var(--green); }
+.tab-state.canceling { color: #8a6400; }
+.tab-panel > .keys-form:first-child { margin-top: 0; }
