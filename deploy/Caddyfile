@@ -14,3 +14,9 @@
 	# Caddy replaces any X-Forwarded-For a visitor sends, so the app sees the real address.
 	reverse_proxy app:4090
 }
+
+# www.<domain> sends people on to <domain>. Its DNS must point here too (an A record, or a
+# CNAME to the domain); without that, delete this block.
+www.{$SITE_DOMAIN} {
+	redir https://{$SITE_DOMAIN}{uri} permanent
+}

@@ -45,7 +45,7 @@ To bring in data from the JSON prototype (`data/db.json` and `data/uploads`), st
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | `127.0.0.1`, `3306`, `binmania`, none, `binmania` | MySQL connection |
 | `DB_SSL` | off | `true` requires TLS to MySQL (for a database on another machine) |
 | `NODE_ENV` | | `production` turns on the production rules below |
-| `PUBLIC_ORIGIN` | the request's own address | The site's address, e.g. `https://binmania.startwithdata.com`. Required in production |
+| `PUBLIC_ORIGIN` | the request's own address | The site's address, e.g. `https://maniacrewards.com`. Required in production |
 | `COOKIE_SECURE` | on in production | Session cookie only over https |
 | `TRUST_PROXY` | off | Behind a reverse proxy, which proxies to trust (Express `trust proxy`, e.g. `uniquelocal`) |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `admin@binmania.local` and a generated password | The first admin, made when the database has none. Required in production |
@@ -113,7 +113,7 @@ The response:
     "name": "Jamie Carter",
     "status": "active",
     "memberSince": "2026-10-27T17:40:12.000Z",
-    "selfieUrl": "https://binmania.startwithdata.com/api/selfie/…?exp=…&sig=…"
+    "selfieUrl": "https://maniacrewards.com/api/selfie/…?exp=…&sig=…"
   }
 }
 ```
@@ -148,7 +148,7 @@ The app runs on its own server, in Docker, from `/opt/binmania`. `docker-compose
 
 | Container | What it does |
 | --- | --- |
-| `caddy` | https on ports 80 and 443. Gets a free Let's Encrypt certificate for `SITE_DOMAIN`, renews it, and sends http to https |
+| `caddy` | https on ports 80 and 443. Gets a free Let's Encrypt certificate for `SITE_DOMAIN`, renews it, sends http to https and `www.` to the plain domain |
 | `app` | The membership app, reachable only through Caddy. Read-only file system, no Linux capabilities, health check on `/healthz` |
 | `db` | MySQL 8.4, on a private Docker network the internet can't reach. Data in the `binmania_mysql` volume |
 | `backup` | Dumps the database when it starts and every 24 hours into `/opt/binmania/backups`, keeping `BACKUP_KEEP_DAYS` days |
@@ -157,7 +157,7 @@ The app runs on its own server, in Docker, from `/opt/binmania`. `docker-compose
 
 ### First setup
 
-1. Point the domain's DNS (an A record) at the server.
+1. Point the domain's DNS (an A record) at the server, and `www.` too (an A record, or a CNAME to the domain).
 2. On the server, as root, run `deploy/setup-server.sh` once. It installs Docker and starts it at boot, allows only SSH, http and https through the firewall, and turns on automatic security updates.
 3. Copy the app to `/opt/binmania` (see below), then in that folder: `cp .env.example .env`, `chmod 600 .env`, and fill it in. `DB_PASSWORD` and `MYSQL_ROOT_PASSWORD` should be long random values (`openssl rand -base64 24`).
 4. `docker compose up -d --build`. Caddy gets the certificate within a minute; `docker compose ps` shows everything healthy.
@@ -173,7 +173,7 @@ The JSON prototype at binmania.startwithdata.com keeps its data in the `binmania
 3. `docker compose run --rm -v ./import:/old:ro app node scripts/import-json.js /old`
 4. `docker compose up -d --build`, then delete the `import` folder.
 
-Members keep their logins, cards and photos, and everyone signs in once more. Admins must choose a new password at their next sign-in. The POS needs a new key from Settings.
+Members keep their logins, cards and photos, and everyone signs in once more. Admins must choose a new password at their next sign-in. The old POS key keeps working; make a new one in Settings anyway, because the prototype kept it in plain text.
 
 ### Ship a new version
 
