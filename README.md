@@ -91,7 +91,7 @@ Web pages cannot block screenshots (only native apps can, and only on Android). 
 
 ## Payments
 
-Super admins set payments up in **Payments** (menu → Payments); the in-app **setup guide** there walks through it, including the permissions a restricted Stripe key needs. Every change asks for their password again, which holds for 10 minutes.
+Super admins set payments up in **Payments** (menu → Payments). **Help** (also in their menu) explains how the site works, what each kind of login can do, setting up Stripe (including the permissions a restricted key needs), everyday tasks and troubleshooting. Payments shows sandbox and live in two tabs. Every change asks for their password again, which holds for 10 minutes.
 
 | Mode | New sign-ups | Memberships that count |
 | --- | --- | --- |

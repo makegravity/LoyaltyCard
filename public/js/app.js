@@ -5,6 +5,7 @@ import * as member from './member.js';
 import * as admin from './admin.js';
 import * as counter from './counter.js';
 import * as payments from './payments.js';
+import * as help from './help.js';
 import * as account from './account.js';
 
 const app = document.getElementById('app');
@@ -25,7 +26,11 @@ const ADMIN_NAV = [
   { route: 'admin/settings', label: 'Settings', icon: 'sliders' },
 ];
 // Super admins also hold the Stripe keys and choose the plan.
-const SUPER_NAV = [...ADMIN_NAV, { route: 'admin/payments', label: 'Payments', icon: 'creditCard' }];
+const SUPER_NAV = [
+  ...ADMIN_NAV,
+  { route: 'admin/payments', label: 'Payments', icon: 'creditCard' },
+  { route: 'admin/help', label: 'Help', icon: 'info' },
+];
 // Cashiers check membership cards and sign people up at the counter.
 const CASHIER_NAV = [
   { route: 'scan', label: 'Scan cards', icon: 'scan' },
@@ -48,7 +53,9 @@ const ROUTES = {
   'admin/staff': { view: admin.staff, access: 'admin' },
   'admin/settings': { view: admin.settings, access: 'admin' },
   'admin/payments': { view: payments.payments, access: 'superadmin' },
-  'admin/payments/guide': { view: payments.guide, access: 'superadmin' },
+  'admin/help': { view: help.docs, access: 'superadmin' },
+  // The setup guide's old address opens Help at Setting up Stripe.
+  'admin/payments/guide': { view: help.docs, access: 'superadmin' },
   scan: { view: admin.verify, access: 'staff' },
   'new-member': { view: counter.newMember, access: 'staff' },
   password: { view: account.password, access: 'account' },

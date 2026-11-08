@@ -973,3 +973,19 @@ a.drawer-signout { text-decoration: none; }
 .tab-state.active { color: var(--green); }
 .tab-state.canceling { color: #8a6400; }
 .tab-panel > .keys-form:first-child { margin-top: 0; }
+
+/* Help */
+.help-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.help-nav .btn { flex: 1 1 auto; }
+.help-topic { scroll-margin-top: 76px; padding-top: 14px; }
+.help-head { font-size: 1.35rem; margin: 6px 0 12px; }
+.help-lead { color: var(--ink-2); margin: -4px 0 12px; }
+.guide h3 { font-size: 1.02rem; margin-bottom: 8px; }
+.matrix { width: 100%; border-collapse: collapse; font-size: 0.82rem; table-layout: fixed; }
+.matrix th, .matrix td { padding: 8px 4px; border-top: 1px solid var(--line); vertical-align: middle; }
+.matrix th { font-size: 0.68rem; font-weight: 800; color: var(--ink-2); border-top: 0; text-align: center; line-height: 1.2; padding: 8px 1px; overflow-wrap: anywhere; }
+.matrix th:first-child, .matrix td:first-child { text-align: left; width: 38%; padding-right: 8px; }
+.matrix td + td { text-align: center; }
+.matrix .yes { color: var(--green); display: inline-flex; }
+.matrix .yes .icon { width: 18px; height: 18px; }
+.matrix .no { color: #b8c0c8; font-weight: 700; }
