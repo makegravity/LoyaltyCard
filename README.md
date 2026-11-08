@@ -1,8 +1,8 @@
 # Bin Mania membership
 
-A mobile-web loyalty membership for [Bin Mania](https://binmaniastores.com/). People sign up, pay a monthly fee, add a selfie, and get a digital membership card with a rotating QR code. Staff sign in as **admins** (fee, offers, members, staff, settings) or **cashiers** (scan membership cards, nothing else).
+A mobile-web loyalty membership for [Bin Mania](https://binmaniastores.com/). People sign up (online, or at the register), pay through Stripe, add a selfie, and get a digital membership card with a rotating QR code. Staff sign in as **cashiers** (scan cards, sign up members at the counter), **admins** (also offers, members, staff, settings) or **super admins** (also the Stripe keys, the plan and the payment mode).
 
-Node + Express with a MySQL database, and plain HTML/CSS/JS in `public/` (no build step). Payments are simulated until Stripe is connected.
+Node + Express with a MySQL database, Stripe for card payments, and plain HTML/CSS/JS in `public/` (no build step).
 
 ## Run it locally
 
@@ -48,7 +48,8 @@ To bring in data from the JSON prototype (`data/db.json` and `data/uploads`), st
 | `PUBLIC_ORIGIN` | the request's own address | The site's address, e.g. `https://maniacrewards.com`. Required in production |
 | `COOKIE_SECURE` | on in production | Session cookie only over https |
 | `TRUST_PROXY` | off | Behind a reverse proxy, which proxies to trust (Express `trust proxy`, e.g. `uniquelocal`) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `admin@binmania.local` and a generated password | The first admin, made when the database has none. Required in production |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `admin@binmania.local` and a generated password | The first account (a super admin), made when the database has none. Required in production |
+| `SECRETS_KEY` | derived from the database | 64 hex characters (`openssl rand -hex 32`) that encrypt the Stripe keys saved in Payments. Required in production |
 | `PORT`, `HOST` | `4090`, `0.0.0.0` | Where the server listens |
 
 ## Logins and roles
@@ -57,19 +58,20 @@ Everyone signs in on the same page and lands where their role belongs.
 
 | Role | Gets in by | Can |
 | --- | --- | --- |
-| Member | Signing up | Their card, offers and billing |
-| Cashier | An admin adds them | Scan membership cards. Nothing else |
-| Admin | An admin adds them (the first comes from `ADMIN_EMAIL`) | Offers, members, checking codes, staff, settings |
+| Member | Signing up, or a cashier signs them up | Their card, offers and billing |
+| Cashier | An admin adds them | Scan membership cards, sign up new members at the counter |
+| Admin | An admin adds them | Also offers, members, staff and settings |
+| Super admin | The first account (from `ADMIN_EMAIL`), or another super admin adds them | Also **Payments**: Stripe keys, the plan new members join on, the payment mode |
 
-**Admin → Staff** adds a cashier or admin and shows a temporary password once, to pass on. At their first sign-in they must choose their own (10+ characters for cashiers, 12+ for admins) before they can do anything else. The same page makes a new temporary password for someone who forgot theirs, or removes them. Both sign the person out everywhere at once. An admin can't remove themselves, so there is always one admin.
+**Admin → Staff** adds staff and shows a temporary password once, to pass on. At their first sign-in they must choose their own (8+ characters, like every password) before they can do anything else. The same page makes a new temporary password for someone who forgot theirs, or removes them. Both sign the person out everywhere at once. Only a super admin can add, reset or remove a super admin, and nobody can remove themselves. If there is ever no super admin, the longest-serving admin becomes one when the app starts.
 
 Anyone signed in can change their password from the menu, which signs them out on their other devices.
 
 ## What a member sees
 
-1. **Sign-up page**: program name, monthly price and perks (all set by the admin).
+1. **Sign-up page**: program name, price and perks. With Stripe they come from the plan the super admin chose (product name, price and interval, and the product's features if it lists any); otherwise from Settings.
 2. **Create account**: name, email, optional mobile, password.
-3. **Payment**: in demo mode, a card form that pretends to charge. Only the brand, last four digits and expiry reach the server. With demo mode off, sign-up shows "opens soon".
+3. **Payment**: Stripe's card form (it runs in Stripe's frame, so card numbers never reach this server; Apple Pay and Google Pay show where available). In demo mode, a card form that pretends to charge. With payments off, sign-up shows "opens soon".
 4. **Selfie**: opens the front camera on phones. The photo is cropped square, shrunk on the phone, and stored in the database.
 5. **The app**, with a side menu of three pages:
    - **Offers**: the admin's posts, newest first, each with its time. New posts get a badge.
@@ -86,6 +88,29 @@ A code looks like `BM1.<member number>.<time window>.<signature>`. The signature
 - When a code is scanned, the member's screen shows "Scanned!" until the next code.
 
 Web pages cannot block screenshots (only native apps can, and only on Android). The card makes screenshots useless instead: codes expire and work once. It also makes a still image easy to spot. A light sweeps across the card, the clock ticks every second, and the code is hidden while the page is in the background. Long-press saving and printing are turned off, and the screen stays awake while the card is open.
+
+## Payments
+
+Super admins set payments up in **Payments** (menu → Payments); the in-app **setup guide** there walks through it, including the permissions a restricted Stripe key needs. Every change asks for their password again, which holds for 10 minutes.
+
+| Mode | New sign-ups | Memberships that count |
+| --- | --- | --- |
+| Off | Closed | Live ones |
+| Demo | Made-up cards, nothing charged | All |
+| Sandbox | Stripe test mode: test cards, nothing charged | All |
+| Live | Real cards, through Stripe | Live ones |
+
+So going live ends every demo and sandbox membership at once, and live members keep working in every mode.
+
+- **Keys**: a publishable key and a secret (or restricted) key per mode, checked with Stripe before they're saved. The secret key is encrypted with `SECRETS_KEY` and never shown again.
+- **Webhook**: saving keys on an https site sets up a webhook in Stripe at `/api/stripe/webhook/sandbox` (or `/live`) for subscription, invoice, price and product events. Locally, use `stripe listen` and paste its signing secret.
+- **Plan**: one of the account's recurring prices, chosen (or created) in Payments. New members join on it; current members keep the price they joined at. Name and price changes made in Stripe arrive by webhook.
+- **Subscriptions** (`lib/payments.js`): the subscription is made when the member presses Pay, waits for the first payment, and the card form confirms it. Stripe renews; webhooks and a check after each period end keep our copy up to date. A failed renewal shows "Payment due" and the card keeps working while Stripe retries; updating the card retries at once. If nothing is heard from Stripe 3 days after a period ends, the card stops.
+- **Billing**: members change their card, cancel or keep their membership; history lists each payment with Stripe's receipt.
+
+## Signing up at the counter
+
+**New member** (cashiers and admins): the customer's name, email, optional mobile and a photo, then the customer types their card into Stripe's form on the register's screen. Once paid, a QR code appears: the customer scans it with their phone, chooses a password, and their card opens there. The link works once, for 24 hours; **Members** shows who hasn't opened theirs yet and makes a new link. Until the customer signs in, staff can pick the same email up again (to retry a declined card or make a new link).
 
 ## Checking codes (cashiers, admins and the future POS)
 
@@ -123,12 +148,9 @@ The response:
 ## Admin
 
 - **Offers**: post a headline (optional), message and picture (optional). Delete posts.
-- **Members**: counts, demo monthly revenue, search, each member's photo and billing details, and "Ask for a new selfie". Members can't change their own photo, so a card can't be passed to someone else by swapping it.
-- **Check a code**: as above.
-- **Staff**: as above.
-- **Settings**: demo mode switch, program name, monthly fee, sign-up perks, code rotation time, POS key.
-
-Changing the fee applies to new members. Current members keep the price they joined at, as Stripe does.
+- **Members**: counts, monthly revenue, search, each member's photo, billing details and who signed them up at the counter, "Ask for a new selfie", and a new phone link for counter sign-ups. Members can't change their own photo, so a card can't be passed to someone else by swapping it.
+- **New member**, **Check a code**, **Staff**: as above.
+- **Settings**: the payment mode and plan (read-only; super admins change them in Payments), program name, the fee and perks used in demo mode, code rotation time, POS key.
 
 ## Security
 
@@ -137,10 +159,11 @@ Changing the fee applies to new members. Current members keep the price they joi
 - **Limits**: 10 wrong passwords per email and address, and 50 sign-ins per address, every 15 minutes; 20 sign-ups per address per hour; 10 password-change attempts per person per 15 minutes. They are counted in memory, which suits one app container.
 - **Cross-site requests**: every write must carry this site's own `Origin` (`PUBLIC_ORIGIN` in production), on top of SameSite cookies.
 - **Headers**: a strict Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff`, same-origin opener and resource policies, `no-store` on every API response. HSTS is set by Caddy.
-- **Uploads**: photos are checked to really be JPEG, PNG or WebP, up to 4 MB. Only the two upload routes accept bodies over 64 KB.
+- **Uploads**: photos are checked to really be JPEG, PNG or WebP, up to 4 MB. Only the upload routes accept bodies over 64 KB.
+- **Payments**: card details go straight from the browser to Stripe. Stripe keys are encrypted at rest; changing them, the plan or the mode needs a fresh password confirmation. Webhooks are accepted only with a valid Stripe signature, and every event is checked by fetching the subscription from Stripe. Counter sign-up links are single-use 256-bit tokens, stored hashed.
 - **Database**: every change to a member's billing, photo or scans locks their row, so two requests at once can't renew a period twice or accept a code twice. The app's MySQL user needs rights on its own database only.
-- **Audit log**: sign-ins (and failed ones), sign-outs, password changes, staff changes, settings changes, POS keys, offers, selfie resets and every code check (who, what, when, from where) go to the `audit_log` table.
-- **Production checks**: with `NODE_ENV=production` the server refuses to start without an https `PUBLIC_ORIGIN` and a database password. The first admin must come from `ADMIN_EMAIL`/`ADMIN_PASSWORD` and must choose a new password at first sign-in.
+- **Audit log**: sign-ins (and failed ones), sign-outs, password changes, staff changes, settings changes, Stripe key, plan and mode changes, sign-ups and payments, counter sign-ups and links, POS keys, offers, selfie resets and every code check (who, what, when, from where) go to the `audit_log` table.
+- **Production checks**: with `NODE_ENV=production` the server refuses to start without an https `PUBLIC_ORIGIN`, a database password and `SECRETS_KEY`. The first account must come from `ADMIN_EMAIL`/`ADMIN_PASSWORD` and must choose a new password at first sign-in.
 
 ## Deploy
 
@@ -159,7 +182,7 @@ The app runs on its own server, in Docker, from `/opt/binmania`. `docker-compose
 
 1. Point the domain's DNS (an A record) at the server, and `www.` too (an A record, or a CNAME to the domain).
 2. On the server, as root, run `deploy/setup-server.sh` once. It installs Docker and starts it at boot, allows only SSH, http and https through the firewall, and turns on automatic security updates.
-3. Copy the app to `/opt/binmania` (see below), then in that folder: `cp .env.example .env`, `chmod 600 .env`, and fill it in. `DB_PASSWORD` and `MYSQL_ROOT_PASSWORD` should be long random values (`openssl rand -base64 24`).
+3. Copy the app to `/opt/binmania` (see below), then in that folder: `cp .env.example .env`, `chmod 600 .env`, and fill it in. `DB_PASSWORD` and `MYSQL_ROOT_PASSWORD` should be long random values (`openssl rand -base64 24`); `SECRETS_KEY` comes from `openssl rand -hex 32`. Keep a copy of `SECRETS_KEY` somewhere safe: without it, the Stripe keys have to be entered again.
 4. `docker compose up -d --build`. Caddy gets the certificate within a minute; `docker compose ps` shows everything healthy.
 
 On an empty database, set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` for the first start. Sign in, choose a new password, then delete `ADMIN_PASSWORD` from `.env`.
@@ -194,6 +217,6 @@ Only the app container is rebuilt and restarted, in a few seconds. Database chan
 
 ## Not done yet
 
-- **Stripe**: nothing is charged. `lib/billing.js` is shaped like Stripe subscriptions, so the swap is: Stripe Checkout for the sign-up payment, the Customer Portal for Billing, and webhooks to set each member's status. Renewals are simulated when a member's period ends.
+- **Card payments in person** (Stripe Terminal). At the counter the customer types their card on the register's screen.
 - **Password reset by email** for members, and email receipts. Staff passwords are reset by an admin.
 - **Off-site backup copies** and uptime monitoring.

@@ -1,7 +1,10 @@
-// Router and app shell (top bar + side menu). Pages live in member.js, admin.js and account.js.
-import { api, esc, icon, initials, logo } from './lib.js';
+// Router and app shell (top bar + side menu). Pages live in member.js, admin.js, counter.js,
+// payments.js and account.js.
+import { api, esc, icon, initials, isActiveStatus, logo } from './lib.js';
 import * as member from './member.js';
 import * as admin from './admin.js';
+import * as counter from './counter.js';
+import * as payments from './payments.js';
 import * as account from './account.js';
 
 const app = document.getElementById('app');
@@ -16,14 +19,20 @@ const MEMBER_NAV = [
 const ADMIN_NAV = [
   { route: 'admin/offers', label: 'Offers', icon: 'megaphone' },
   { route: 'admin/members', label: 'Members', icon: 'users' },
+  { route: 'new-member', label: 'New member', icon: 'userPlus' },
   { route: 'scan', label: 'Check a code', icon: 'scan' },
   { route: 'admin/staff', label: 'Staff', icon: 'badge' },
   { route: 'admin/settings', label: 'Settings', icon: 'sliders' },
 ];
-// Cashiers only check membership cards.
-const CASHIER_NAV = [{ route: 'scan', label: 'Scan cards', icon: 'scan' }];
-const NAV = { member: MEMBER_NAV, admin: ADMIN_NAV, cashier: CASHIER_NAV };
-const ROLE_TAG = { admin: 'Admin', cashier: 'Cashier' };
+// Super admins also hold the Stripe keys and choose the plan.
+const SUPER_NAV = [...ADMIN_NAV, { route: 'admin/payments', label: 'Payments', icon: 'creditCard' }];
+// Cashiers check membership cards and sign people up at the counter.
+const CASHIER_NAV = [
+  { route: 'scan', label: 'Scan cards', icon: 'scan' },
+  { route: 'new-member', label: 'New member', icon: 'userPlus' },
+];
+const NAV = { member: MEMBER_NAV, admin: ADMIN_NAV, superadmin: SUPER_NAV, cashier: CASHIER_NAV };
+const ROLE_TAG = { superadmin: 'Super admin', admin: 'Admin', cashier: 'Cashier' };
 
 const ROUTES = {
   '': { view: member.landing, access: 'guest' },
@@ -38,19 +47,24 @@ const ROUTES = {
   'admin/members': { view: admin.members, access: 'admin' },
   'admin/staff': { view: admin.staff, access: 'admin' },
   'admin/settings': { view: admin.settings, access: 'admin' },
+  'admin/payments': { view: payments.payments, access: 'superadmin' },
+  'admin/payments/guide': { view: payments.guide, access: 'superadmin' },
   scan: { view: admin.verify, access: 'staff' },
+  'new-member': { view: counter.newMember, access: 'staff' },
   password: { view: account.password, access: 'account' },
+  claim: { view: account.claim, access: 'any' },
 };
 
-const isActive = (me) => me && ['active', 'canceling'].includes(me.status);
-const isStaff = (me) => me && (me.role === 'admin' || me.role === 'cashier');
+const isActive = (me) => me && isActiveStatus(me.status);
+const isAdmin = (me) => me && (me.role === 'admin' || me.role === 'superadmin');
+const isStaff = (me) => me && (isAdmin(me) || me.role === 'cashier');
 
 // Where a signed-in person belongs: a new password for staff given a temporary one,
 // sign-up steps for members, then their main page.
 function homeFor(me) {
   if (!me) return '';
   if (me.mustChangePassword) return 'password';
-  if (me.role === 'admin') return 'admin/offers';
+  if (isAdmin(me)) return 'admin/offers';
   if (me.role === 'cashier') return 'scan';
   if (me.status === 'none') return 'join';
   if (isActive(me) && !me.selfieUrl) return 'selfie';
@@ -61,6 +75,8 @@ function guard(name) {
   const def = ROUTES[name];
   const me = state.me;
   if (!def) return homeFor(me);
+  // A sign-up link works whoever is signed in on this phone (it signs them in as the new member).
+  if (def.access === 'any') return name;
   if (me && me.mustChangePassword && name !== 'password') return 'password';
   switch (def.access) {
     case 'guest':
@@ -68,7 +84,9 @@ function guard(name) {
     case 'account':
       return me ? name : 'login';
     case 'admin':
-      return me && me.role === 'admin' ? name : me ? homeFor(me) : 'login';
+      return isAdmin(me) ? name : me ? homeFor(me) : 'login';
+    case 'superadmin':
+      return me && me.role === 'superadmin' ? name : me ? homeFor(me) : 'login';
     case 'staff':
       return isStaff(me) ? name : me ? homeFor(me) : 'login';
     case 'join':
@@ -185,7 +203,7 @@ function shell({ wide = false } = {}) {
       <div class="drawer-foot">
         <a class="drawer-signout ${route === 'password' ? 'active' : ''}" href="#/password">${icon('key')}Change password</a>
         <button class="drawer-signout" type="button" data-signout>${icon('logout')}Sign out</button>
-        ${state.config.demoMode ? '<span class="demo-pill">Prototype · demo payments</span>' : ''}
+        ${member.modePill(state.config)}
       </div>
     </nav>
     <main class="wrap ${wide ? 'wide' : ''}" id="main"></main>`;

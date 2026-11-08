@@ -37,8 +37,44 @@ export async function api(path, { method = 'GET', body } = {}) {
 
 export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function money(cents) {
-  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+export function money(cents, currency = 'usd') {
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: currency.toUpperCase() });
+}
+
+// Prices come as { amountCents, currency, interval, intervalCount }: a Stripe plan, or the
+// fee from Settings (monthly). Subscriptions carry the same fields, with priceCents.
+const ADVERB = { day: 'daily', week: 'weekly', month: 'monthly', year: 'yearly' };
+
+export function per(price) {
+  const n = price.intervalCount || 1;
+  const unit = price.interval || 'month';
+  return n === 1 ? `/ ${unit}` : `every ${n} ${unit}s`;
+}
+
+export function priceLabel(price) {
+  return `${money(price.amountCents ?? price.priceCents, price.currency)} ${per(price)}`;
+}
+
+// "Monthly", "Yearly", "Every 3 months".
+export function billedEvery(price) {
+  const n = price.intervalCount || 1;
+  const unit = price.interval || 'month';
+  const word = n === 1 ? ADVERB[unit] : `every ${n} ${unit}s`;
+  return word[0].toUpperCase() + word.slice(1);
+}
+
+export function nextPeriod(price, from = new Date()) {
+  const d = new Date(from);
+  const n = price.intervalCount || 1;
+  const unit = price.interval || 'month';
+  if (unit === 'day') d.setDate(d.getDate() + n);
+  else if (unit === 'week') d.setDate(d.getDate() + 7 * n);
+  else {
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + (unit === 'year' ? 12 * n : n));
+    if (d.getDate() < day) d.setDate(0);
+  }
+  return d;
 }
 
 export function fmtDate(iso, opts = { month: 'short', day: 'numeric', year: 'numeric' }) {
@@ -74,9 +110,12 @@ export function logo(cls = '') {
 export const STATUS_LABEL = {
   active: 'Active',
   canceling: 'Ends soon',
+  past_due: 'Payment due',
   canceled: 'Ended',
   none: 'Not paid',
 };
+
+export const isActiveStatus = (status) => ['active', 'canceling', 'past_due'].includes(status);
 
 const ICONS = {
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
@@ -105,6 +144,10 @@ const ICONS = {
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   userPlus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
+  creditCard: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10h20M6 15h4"/>',
+  refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M3 21v-5h5"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
 
 export function icon(name) {

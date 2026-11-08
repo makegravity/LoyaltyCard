@@ -8,14 +8,19 @@ import {
   fmtDateTime,
   icon,
   initials,
+  isActiveStatus,
   money,
   photoToDataUrl,
+  priceLabel,
   setBusy,
   showError,
   STATUS_LABEL,
   timeAgo,
   toast,
 } from './lib.js';
+import { handoffHtml, wireCopy } from './counter.js';
+
+const PAYMENT_MODE = { off: 'Off', demo: 'Demo', sandbox: 'Sandbox (Stripe test mode)', live: 'Live (Stripe)' };
 
 // ---------- Offers ----------
 
@@ -131,6 +136,7 @@ export async function offers(ctx) {
 function memberRow(m) {
   const thumb = m.selfieUrl ? `<img src="${esc(m.selfieUrl)}" alt="">` : esc(initials(m.name));
   const ends = m.status === 'canceling' ? 'Ends' : m.status === 'canceled' ? 'Ended' : 'Next payment';
+  const kind = m.billedBy === 'demo' ? '<span class="chip demo">Demo</span>' : m.billedBy === 'sandbox' ? '<span class="chip demo">Test</span>' : '';
   return `<details class="card member" data-id="${esc(m.id)}">
     <summary>
       <span class="member-thumb">${thumb}</span>
@@ -142,11 +148,19 @@ function memberRow(m) {
       <dl class="kv" style="margin:0">
         <div><dt>Email</dt><dd>${esc(m.email)}</dd></div>
         ${m.phone ? `<div><dt>Phone</dt><dd>${esc(m.phone)}</dd></div>` : ''}
-        ${m.priceCents != null ? `<div><dt>Plan</dt><dd>${money(m.priceCents)} / month</dd></div>` : ''}
+        ${m.priceCents != null ? `<div><dt>Plan</dt><dd>${esc(priceLabel({ priceCents: m.priceCents, interval: m.interval }))} ${kind}</dd></div>` : ''}
+        ${m.joinedByName ? `<div><dt>Joined</dt><dd>At the counter, with ${esc(m.joinedByName)}</dd></div>` : ''}
         ${m.currentPeriodEnd ? `<div><dt>${ends}</dt><dd>${fmtDate(m.currentPeriodEnd)}</dd></div>` : ''}
         ${m.card ? `<div><dt>Card</dt><dd>${esc(m.card)}</dd></div>` : ''}
         <div><dt>Last scanned</dt><dd>${m.lastScanAt ? esc(fmtDateTime(m.lastScanAt)) + (m.lastScannedBy ? ` · ${esc(m.lastScannedBy)}` : '') : 'Never'}</dd></div>
       </dl>
+      ${
+        m.pending && isActiveStatus(m.status)
+          ? `<div class="notice" style="margin:0">${icon('phone')}<span>Hasn't opened the card on their phone yet.</span></div>
+             <button type="button" class="btn btn-secondary btn-sm" data-link>New link for their phone</button>
+             <div data-handoff></div>`
+          : ''
+      }
       ${m.selfieUrl ? '<button type="button" class="btn btn-secondary btn-sm" data-reset-selfie>Ask for a new selfie</button>' : ''}
     </div>
   </details>`;
@@ -159,13 +173,15 @@ export async function members(ctx) {
   if (!ctx.isCurrent()) return;
   const box = $('#members', main);
   const today = new Date().toDateString();
-  const paying = all.filter((m) => m.status === 'active');
-  const current = all.filter((m) => ['active', 'canceling'].includes(m.status));
+  const paying = all.filter((m) => ['active', 'past_due'].includes(m.status));
+  const current = all.filter((m) => isActiveStatus(m.status));
+  // Yearly plans count as a twelfth a month.
+  const perMonth = (m) => (m.priceCents || 0) / (m.interval === 'year' ? 12 : m.interval === 'week' ? 12 / 52 : m.interval === 'day' ? 12 / 365 : 1);
 
   box.innerHTML = `
     <div class="stats">
       <div class="stat"><strong>${current.length}</strong><span>Active members</span></div>
-      <div class="stat"><strong>${money(paying.reduce((sum, m) => sum + (m.priceCents || 0), 0))}</strong><span>Monthly revenue</span></div>
+      <div class="stat"><strong>${money(Math.round(paying.reduce((sum, m) => sum + perMonth(m), 0)))}</strong><span>Monthly revenue</span></div>
       <div class="stat"><strong>${all.filter((m) => m.status === 'canceling').length}</strong><span>Ending this month</span></div>
       <div class="stat"><strong>${all.filter((m) => m.lastScanAt && new Date(m.lastScanAt).toDateString() === today).length}</strong><span>Scanned today</span></div>
     </div>
@@ -185,7 +201,21 @@ export async function members(ctx) {
           <p>${all.length ? 'Try a different search.' : 'People who sign up show here.'}</p></div>`;
   };
   $('#q', box).addEventListener('input', draw);
+  wireCopy(list);
   list.addEventListener('click', async (e) => {
+    const linkBtn = e.target.closest('[data-link]');
+    if (linkBtn) {
+      const m = all.find((x) => x.id === linkBtn.closest('[data-id]').dataset.id);
+      setBusy(linkBtn, true, 'Making link…');
+      try {
+        const link = await api(`/api/staff/members/${encodeURIComponent(m.id)}/link`, { method: 'POST' });
+        linkBtn.closest('[data-id]').querySelector('[data-handoff]').innerHTML = handoffHtml(m, link);
+      } catch (err) {
+        toast(err.message, 'bad');
+      }
+      setBusy(linkBtn, false);
+      return;
+    }
     const btn = e.target.closest('[data-reset-selfie]');
     if (!btn) return;
     const row = btn.closest('[data-id]');
@@ -386,10 +416,12 @@ function showSecret(box, html) {
 
 // ---------- Staff ----------
 
-const ROLE_LABEL = { admin: 'Admin', cashier: 'Cashier' };
+const ROLE_LABEL = { superadmin: 'Super admin', admin: 'Admin', cashier: 'Cashier' };
 
-function staffRow(s, meId) {
-  const self = s.id === meId;
+function staffRow(s, me) {
+  const self = s.id === me.id;
+  // Only a super admin can change another super admin's login.
+  const locked = s.role === 'superadmin' && me.role !== 'superadmin';
   const seen = s.lastLoginAt ? `Last signed in ${timeAgo(s.lastLoginAt).replace(/^Just/, 'just')}` : 'Not signed in yet';
   return `<article class="card staff-row" data-id="${esc(s.id)}">
     <div class="staff-top">
@@ -399,7 +431,7 @@ function staffRow(s, meId) {
     </div>
     <p class="muted small staff-meta">${esc(seen)}${s.mustChangePassword ? ' · has a temporary password' : ''}</p>
     ${
-      self
+      self || locked
         ? ''
         : `<div class="staff-actions">
       <button type="button" class="btn btn-secondary btn-sm" data-reset>${icon('key')}New password</button>
@@ -409,11 +441,11 @@ function staffRow(s, meId) {
 }
 
 export async function staff(ctx) {
-  const meId = ctx.state.me.id;
+  const me = ctx.state.me;
   const main = ctx.shell();
   main.innerHTML = `
     <h1 class="page-title">Staff</h1>
-    <p class="page-sub">Cashiers can only scan membership cards. Admins can do everything, including adding staff.</p>
+    <p class="page-sub">Cashiers scan membership cards and sign up new members at the counter. Admins do everything else except payments, which only super admins manage.</p>
     <div id="secret"></div>
     <form class="card" id="add" novalidate>
       <h2>Add someone</h2>
@@ -424,9 +456,15 @@ export async function staff(ctx) {
       <fieldset class="role-pick">
         <legend>Role</legend>
         <label class="role-option"><input type="radio" name="role" value="cashier" checked>
-          <span><strong>Cashier</strong><span>Scans membership cards. Nothing else.</span></span></label>
+          <span><strong>Cashier</strong><span>Scans membership cards and signs up new members.</span></span></label>
         <label class="role-option"><input type="radio" name="role" value="admin">
           <span><strong>Admin</strong><span>Offers, members, settings and staff.</span></span></label>
+        ${
+          me.role === 'superadmin'
+            ? `<label class="role-option"><input type="radio" name="role" value="superadmin">
+          <span><strong>Super admin</strong><span>Everything, plus Stripe keys, the plan and payment mode.</span></span></label>`
+            : ''
+        }
       </fieldset>
       <p class="form-error" role="alert" hidden></p>
       <button class="btn btn-primary btn-block" type="submit">${icon('userPlus')}Add and make a password</button>
@@ -440,7 +478,7 @@ export async function staff(ctx) {
   let people = [];
 
   const draw = () => {
-    list.innerHTML = people.map((s) => staffRow(s, meId)).join('');
+    list.innerHTML = people.map((s) => staffRow(s, me)).join('');
   };
   const reveal = (person, password, isNew) => {
     const first = person.name.split(' ')[0];
@@ -547,31 +585,35 @@ export async function settings(ctx) {
   const box = $('#settings', main);
   const origin = location.origin;
 
+  const fromStripe = s.plan.source === 'stripe';
   box.innerHTML = `
     <section class="card">
-      <div class="toggle-row">
-        <div><h2>Demo mode</h2><p>Members can enter card details and "pay" without being charged, so you can try the whole sign-up.</p></div>
-        <label class="switch"><input type="checkbox" id="demo" ${s.demoMode ? 'checked' : ''} aria-label="Demo mode"><span></span></label>
-      </div>
-      <div class="status-line" style="margin-top:14px">
-        <span class="muted small" style="font-weight:700">Stripe</span>
-        <span class="chip canceled">Not connected</span>
-      </div>
-      <p class="muted small" id="demo-hint" style="margin-top:10px">${
-        s.demoMode
-          ? 'Payments are simulated. No card is charged.'
-          : 'Demo mode is off and Stripe is not connected yet, so new people cannot finish signing up.'
+      <h2>Payments</h2>
+      <dl class="kv">
+        <div><dt>Mode</dt><dd>${esc(PAYMENT_MODE[s.paymentMode])}</dd></div>
+        <div><dt>New members pay</dt><dd>${esc(priceLabel(s.plan))}${s.plan.open ? '' : ' · sign-up closed'}</dd></div>
+      </dl>
+      <p class="muted small" style="margin-top:12px">${
+        ctx.state.me.role === 'superadmin'
+          ? 'Change the mode, Stripe keys and plan in <a href="#/admin/payments">Payments</a>.'
+          : 'Only a super admin can change the payment mode, Stripe keys and plan.'
       }</p>
     </section>
 
     <p class="section-label">Membership</p>
     <form class="card" id="program" novalidate>
       <div class="field"><label for="name">Program name</label><input id="name" maxlength="40" value="${esc(s.programName)}"></div>
-      <div class="field"><label for="price">Monthly fee (USD)</label>
+      <div class="field"><label for="price">Monthly fee in demo mode (USD)</label>
         <input id="price" type="number" inputmode="decimal" min="0.50" max="999" step="0.01" value="${(s.monthlyPriceCents / 100).toFixed(2)}">
-        <span class="hint">New members pay this. Current members keep the price they joined at.</span></div>
+        <span class="hint">${
+          fromStripe
+            ? 'Not used now: with Stripe, the price, and the program name shown to members, come from the plan chosen in Payments.'
+            : 'New members pay this. Current members keep the price they joined at.'
+        }</span></div>
       <div class="field"><label for="perks">Perks on the sign-up page</label>
-        <textarea id="perks" rows="4">${esc(s.perks)}</textarea><span class="hint">One per line, up to 6.</span></div>
+        <textarea id="perks" rows="4">${esc(s.perks)}</textarea><span class="hint">One per line, up to 6.${
+          fromStripe ? " With Stripe, the plan's product features are shown instead, when it lists any." : ''
+        }</span></div>
       <div class="field"><label for="period">Card code changes every</label>
         <select id="period">${s.qrPeriodOptions.map((p) => `<option value="${p}" ${p === s.qrPeriodSeconds ? 'selected' : ''}>${p} seconds</option>`).join('')}</select>
         <span class="hint">Shorter is harder to share; 20 seconds suits most registers.</span></div>
@@ -589,21 +631,6 @@ export async function settings(ctx) {
       <div id="pos-secret"></div>
       <button type="button" class="btn btn-secondary btn-sm" data-new-key>${s.posKeyHint ? 'Make a new key' : 'Make a key'}</button>
     </section>`;
-
-  $('#demo', box).addEventListener('change', async (e) => {
-    const on = e.target.checked;
-    try {
-      s = (await api('/api/admin/settings', { method: 'PUT', body: { demoMode: on } })).settings;
-      ctx.state.config.demoMode = s.demoMode;
-      $('#demo-hint', box).textContent = s.demoMode
-        ? 'Payments are simulated. No card is charged.'
-        : 'Demo mode is off and Stripe is not connected yet, so new people cannot finish signing up.';
-      toast(on ? 'Demo mode on' : 'Demo mode off');
-    } catch (err) {
-      e.target.checked = !on;
-      toast(err.message, 'bad');
-    }
-  });
 
   const form = $('#program', box);
   form.addEventListener('submit', async (e) => {

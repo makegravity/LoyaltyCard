@@ -48,6 +48,7 @@ services:
       DB_NAME: ${DB_NAME:-binmania}
       DB_USER: ${DB_USER:-binmania}
       DB_PASSWORD: ${DB_PASSWORD}
+      SECRETS_KEY: ${SECRETS_KEY:?Set SECRETS_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     depends_on:

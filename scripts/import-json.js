@@ -41,19 +41,19 @@ async function main() {
 
   await db.tx(async (conn) => {
     if (replace) {
-      for (const table of ['audit_log', 'sessions', 'invoices', 'offers', 'users', 'images', 'settings']) {
+      for (const table of ['audit_log', 'claim_links', 'sessions', 'invoices', 'offers', 'users', 'images', 'settings', 'stripe_accounts']) {
         await db.query(`DELETE FROM ${table}`, [], conn);
       }
     }
     await db.query('DELETE FROM settings', [], conn);
     await db.query(
-      `INSERT INTO settings (id, program_name, monthly_price_cents, demo_mode, qr_period_seconds, perks,
+      `INSERT INTO settings (id, program_name, monthly_price_cents, payment_mode, qr_period_seconds, perks,
         pos_key_hash, pos_key_hint, pos_key_created_at, media_secret, next_member_number, updated_at)
         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         s.programName || 'Bin Mania VIP',
         s.monthlyPriceCents || 999,
-        s.demoMode ? 1 : 0,
+        s.demoMode ? 'demo' : 'off',
         s.qrPeriodSeconds || 20,
         s.perks || '',
         s.posApiKey ? security.sha256(s.posApiKey) : null,

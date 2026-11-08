@@ -1,6 +1,6 @@
-// Account pages for everyone signed in: change password. Staff given a temporary
+// Account pages: change password, and the link a counter sign-up opens on their phone. Staff given a temporary
 // password by an admin land here first and can't use anything else until they change it.
-import { $, api, esc, logo, passwordToggle, setBusy, showError, toast } from './lib.js';
+import { $, api, esc, icon, logo, passwordToggle, setBusy, showError, toast } from './lib.js';
 
 export function password(ctx) {
   const me = ctx.state.me;
@@ -52,4 +52,56 @@ export function password(ctx) {
     }
   });
   form.current.focus({ preventScroll: true });
+}
+
+// The link from a counter sign-up (#/claim?t=…): the member chooses a password and their
+// card opens on this phone.
+export async function claim(ctx) {
+  const main = ctx.bare();
+  const token = new URLSearchParams(location.hash.split('?')[1] || '').get('t') || '';
+  main.innerHTML = `<div class="guest-top">${logo()}</div><div class="card"><p class="muted">Checking your link…</p></div>`;
+  let who;
+  try {
+    who = await api('/api/auth/claim/check', { method: 'POST', body: { token } });
+  } catch (err) {
+    if (!ctx.isCurrent()) return;
+    main.innerHTML = `<div class="guest-top">${logo()}<a class="link" href="#/login">Sign in</a></div>
+      <section class="card empty">${icon('info')}<h2>This link doesn't work</h2><p>${esc(err.message)}</p></section>`;
+    return;
+  }
+  if (!ctx.isCurrent()) return;
+  main.innerHTML = `
+    <div class="guest-top">${logo()}</div>
+    <h1 class="auth-title">Welcome, ${esc(who.name.split(' ')[0])}!</h1>
+    <p class="auth-sub">Choose a password to open your membership card. You'll sign in with ${esc(who.email)} next time.</p>
+    <form class="card" novalidate>
+      <input type="email" name="username" value="${esc(who.email)}" autocomplete="username" hidden>
+      <div class="field"><label for="next">Password</label>
+        <div class="input-wrap"><input id="next" name="next" type="password" autocomplete="new-password" minlength="8" required>
+        <button type="button" class="input-tail" data-toggle-pw>Show</button></div>
+        <span class="hint">At least 8 characters.</span></div>
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">Open my card</button>
+    </form>`;
+  passwordToggle(main);
+  const form = $('form', main);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    showError(form, '');
+    const password = form.next.value;
+    if (password.length < 8) return showError(form, 'Use at least 8 characters for your password.');
+    const btn = $('[type=submit]', form);
+    setBusy(btn, true, 'Opening your card…');
+    try {
+      const { me } = await api('/api/auth/claim', { method: 'POST', body: { token, password } });
+      ctx.state.me = me;
+      await ctx.refreshOffers();
+      toast('Welcome to Bin Mania!', 'ok');
+      location.replace('#/' + ctx.homeFor(me)); // drops the used link from history
+    } catch (err) {
+      setBusy(btn, false);
+      showError(form, err.message);
+    }
+  });
+  form.next.focus({ preventScroll: true });
 }

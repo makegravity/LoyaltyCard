@@ -2,16 +2,21 @@
 import {
   $,
   api,
+  billedEvery,
   confirmSheet,
   esc,
   fmtDate,
   fmtDateTime,
   icon,
+  isActiveStatus,
   logo,
   money,
+  nextPeriod,
   passwordToggle,
+  per,
   PERSON_SVG,
   photoToDataUrl,
+  priceLabel,
   setBusy,
   showError,
   STATUS_LABEL,
@@ -19,8 +24,17 @@ import {
   toast,
   wait,
 } from './lib.js';
+import { cardForm, SANDBOX_NOTE } from './pay.js';
 
-const isActive = (me) => ['active', 'canceling'].includes(me.status);
+const isActive = (me) => isActiveStatus(me.status);
+const usesStripe = (config) => config.paymentMode === 'sandbox' || config.paymentMode === 'live';
+
+// The line under the price on public pages, when payments aren't real.
+export function modePill(config) {
+  if (config.paymentMode === 'demo') return '<span class="demo-pill">Prototype · payments are simulated</span>';
+  if (config.paymentMode === 'sandbox') return '<span class="demo-pill">Sandbox · test cards only</span>';
+  return '';
+}
 
 function steps(n) {
   return `<div class="step-label">Step ${n} of 3</div>
@@ -82,8 +96,8 @@ export function landing(ctx) {
       <div class="qr-panel"><div class="qr">${sampleQr()}</div><p class="qr-copy">Your live code changes every few seconds. Show it at checkout.</p></div>
     </div>
     <section class="card">
-      <div class="price-line"><strong>${money(c.monthlyPriceCents)}</strong><span>/ month</span></div>
-      <p class="muted small">Billed monthly. Cancel anytime from Billing.</p>
+      <div class="price-line"><strong>${money(c.price.amountCents, c.price.currency)}</strong><span>${esc(per(c.price))}</span></div>
+      <p class="muted small">Billed ${esc(billedEvery(c.price).toLowerCase())}. Cancel anytime from Billing.</p>
       <ul class="perks">${c.perks.map((p) => `<li>${icon('check')}<span>${esc(p)}</span></li>`).join('')}</ul>
       <div class="actions">
         <a class="btn btn-primary btn-block" href="#/signup">Join now</a>
@@ -93,7 +107,7 @@ export function landing(ctx) {
     <footer class="guest-foot">
       <strong>Ohio's treasure-hunt discount store</strong>
       <span>Heath · Zanesville · Johnstown</span>
-      ${c.demoMode ? '<span class="demo-pill">Prototype · payments are simulated</span>' : ''}
+      ${modePill(c)}
     </footer>`;
 }
 
@@ -209,7 +223,7 @@ function luhn(digits) {
   return sum % 10 === 0;
 }
 
-function cardFields(name = '') {
+export function cardFields(name = '') {
   return `
     <div class="field"><label for="cc-name">Name on card</label>
       <input id="cc-name" autocomplete="cc-name" autocapitalize="words" value="${esc(name)}"></div>
@@ -226,7 +240,7 @@ function cardFields(name = '') {
     </div>`;
 }
 
-function wireCardFields(root) {
+export function wireCardFields(root) {
   const num = $('#cc-number', root);
   const exp = $('#cc-exp', root);
   const brand = $('[data-brand]', root);
@@ -244,7 +258,7 @@ function wireCardFields(root) {
 }
 
 // Checks the form and returns only what the server keeps: brand, last four and expiry.
-function readCardFields(root) {
+export function readCardFields(root) {
   const name = $('#cc-name', root).value.trim();
   const digits = $('#cc-number', root).value.replace(/\D/g, '');
   const [mm = '', yy = ''] = $('#cc-exp', root).value.split('/');
@@ -264,25 +278,65 @@ function readCardFields(root) {
   return { name, brand: cardBrand(digits), last4: digits.slice(-4), expMonth, expYear };
 }
 
-const DEMO_NOTE = `<div class="notice demo">${icon('info')}<span><b>Demo mode.</b> No card is charged, and the full card number never leaves this phone. Try 4242 4242 4242 4242 with any future date.</span></div>`;
-
-function nextMonth(date = new Date()) {
-  const d = new Date(date);
-  const day = d.getDate();
-  d.setMonth(d.getMonth() + 1);
-  if (d.getDate() < day) d.setDate(0);
-  return d;
-}
+export const DEMO_NOTE = `<div class="notice demo">${icon('info')}<span><b>Demo mode.</b> No card is charged, and the full card number never leaves this phone. Try 4242 4242 4242 4242 with any future date.</span></div>`;
 
 // ---------- step 2: payment ----------
+
+// Asks the server for the outcome of a Stripe payment, a few times while Stripe finishes.
+async function confirmJoin() {
+  let me;
+  for (let i = 0; i < 4; i++) {
+    me = (await api('/api/me/subscribe/confirm', { method: 'POST' })).me;
+    if (isActive(me)) break;
+    await wait(1500);
+  }
+  return me;
+}
 
 export async function join(ctx) {
   const main = ctx.bare();
   const c = await ctx.refreshConfig();
   if (!ctx.isCurrent()) return;
-  const me = ctx.state.me;
+  let me = ctx.state.me;
+  const stripe = usesStripe(c);
+
+  // Back from a card check at the bank, or a payment that went through after the page closed.
+  if (stripe && me.subscription && me.subscription.provider === 'stripe' && me.subscription.status === 'incomplete') {
+    me = ctx.state.me = (await api('/api/me/subscribe/confirm', { method: 'POST' })).me;
+    if (!ctx.isCurrent()) return;
+    if (isActive(me)) return ctx.go(ctx.homeFor(me));
+  }
   const rejoin = me.status === 'canceled';
   const saved = me.paymentMethod;
+  const due = money(c.price.amountCents, c.price.currency);
+
+  let form = '';
+  if (!c.signupOpen) {
+    form = `<section class="card empty" style="margin-top:14px">${icon('lock')}<h2>Online sign-up opens soon</h2>
+      <p>We're getting card payments ready. Please check back soon, or ask at the register.</p></section>`;
+  } else if (stripe) {
+    form = `<section class="card" id="pay-form">
+        ${c.paymentMode === 'sandbox' ? SANDBOX_NOTE : ''}
+        <div class="payment-element" id="card-element"><p class="muted small">Loading the secure card form…</p></div>
+        <p class="form-error" role="alert" hidden></p>
+        <button class="btn btn-primary btn-block" type="button" data-pay disabled>${icon('lock')} Pay ${due} and join</button>
+        <p class="lock-line">${icon('lock')} Secured by Stripe. Your card number never reaches Bin Mania.</p>
+      </section>`;
+  } else {
+    form = `<form class="card" id="pay-form" novalidate>
+        ${DEMO_NOTE}
+        ${
+          saved
+            ? `<label class="saved-card"><input type="radio" name="which" value="saved" checked> ${esc(saved.brand)} •••• ${esc(saved.last4)}</label>
+               <label class="saved-card" style="margin:10px 0 16px;background:#fff;border-color:var(--line)"><input type="radio" name="which" value="new"> Use a different card</label>`
+            : ''
+        }
+        <div data-new-card ${saved ? 'hidden' : ''}>${cardFields(me.name)}</div>
+        <p class="form-error" role="alert" hidden></p>
+        <button class="btn btn-primary btn-block" type="submit">${icon('lock')} Pay ${due} and join</button>
+        <p class="lock-line">${icon('lock')} Demo: no card is charged</p>
+      </form>`;
+  }
 
   main.innerHTML = `
     <div class="guest-top">${logo()}<button type="button" class="btn btn-ghost btn-sm" data-signout>Sign out</button></div>
@@ -290,58 +344,82 @@ export async function join(ctx) {
     <h1 class="auth-title">${rejoin ? `Welcome back, ${esc(me.name.split(' ')[0])}` : 'Start your membership'}</h1>
     <p class="auth-sub">${rejoin ? 'Rejoin to get your card and member offers back.' : 'Your card is ready as soon as payment goes through.'}</p>
     <section class="card">
-      <div class="summary"><div><h2>${esc(c.programName)}</h2><p class="muted small">Monthly membership</p></div><strong>${money(c.monthlyPriceCents)}</strong></div>
+      <div class="summary"><div><h2>${esc(c.programName)}</h2><p class="muted small">${esc(billedEvery(c.price))} membership</p></div><strong>${due}</strong></div>
       <dl class="kv">
-        <div><dt>Due today</dt><dd>${money(c.monthlyPriceCents)}</dd></div>
-        <div><dt>Next payment</dt><dd>${fmtDate(nextMonth())}</dd></div>
+        <div><dt>Due today</dt><dd>${due}</dd></div>
+        <div><dt>Next payment</dt><dd>${fmtDate(nextPeriod(c.price))}</dd></div>
       </dl>
     </section>
-    ${
-      c.demoMode
-        ? `<form class="card" id="pay-form" novalidate>
-            ${DEMO_NOTE}
-            ${
-              saved
-                ? `<label class="saved-card"><input type="radio" name="which" value="saved" checked> ${esc(saved.brand)} •••• ${esc(saved.last4)}</label>
-                   <label class="saved-card" style="margin:10px 0 16px;background:#fff;border-color:var(--line)"><input type="radio" name="which" value="new"> Use a different card</label>`
-                : ''
-            }
-            <div data-new-card ${saved ? 'hidden' : ''}>${cardFields(me.name)}</div>
-            <p class="form-error" role="alert" hidden></p>
-            <button class="btn btn-primary btn-block" type="submit">${icon('lock')} Pay ${money(c.monthlyPriceCents)} and join</button>
-            <p class="lock-line">${icon('lock')} Card payments will be handled by Stripe</p>
-          </form>`
-        : `<section class="card empty" style="margin-top:14px">${icon('lock')}<h2>Online sign-up opens soon</h2>
-            <p>We're getting card payments ready. Please check back soon, or ask at the register.</p></section>`
-    }`;
+    ${form}`;
   wireSignOut(ctx, main);
-  const form = $('#pay-form', main);
-  if (!form) return;
-  wireCardFields(form);
-  const newCard = $('[data-new-card]', form);
-  const useSaved = () => saved && form.which.value === 'saved';
-  form.querySelectorAll('[name=which]').forEach((r) => r.addEventListener('change', () => (newCard.hidden = useSaved())));
+  const box = $('#pay-form', main);
+  if (!box) return;
 
-  form.addEventListener('submit', async (e) => {
+  const done = (updated, message) => {
+    ctx.state.me = updated;
+    toast(message, 'ok');
+    ctx.go(ctx.homeFor(updated));
+  };
+
+  if (stripe) {
+    const btn = $('[data-pay]', box);
+    let card;
+    try {
+      card = await cardForm($('#card-element', box), {
+        publishableKey: c.stripePublishableKey,
+        kind: 'subscription',
+        amountCents: c.price.amountCents,
+        currency: c.price.currency,
+        name: me.name,
+        email: me.email,
+      });
+    } catch (err) {
+      if (ctx.isCurrent()) showError(box, err.message);
+      return;
+    }
+    if (!ctx.isCurrent()) return card.destroy();
+    btn.disabled = false;
+    btn.addEventListener('click', async () => {
+      showError(box, '');
+      setBusy(btn, true, 'Processing payment…');
+      try {
+        await card.pay(async () => {
+          const r = await api('/api/me/subscribe', { method: 'POST' });
+          ctx.state.me = r.me;
+          return r.clientSecret || null;
+        });
+        const updated = await confirmJoin();
+        if (!isActive(updated)) throw new Error("Your payment is still going through. We'll have your card ready in a moment; try again shortly.");
+        done(updated, 'Payment approved');
+      } catch (err) {
+        setBusy(btn, false);
+        showError(box, err.message);
+      }
+    });
+    return () => card.destroy();
+  }
+
+  wireCardFields(box);
+  const newCard = $('[data-new-card]', box);
+  const useSaved = () => saved && box.which.value === 'saved';
+  box.querySelectorAll('[name=which]').forEach((r) => r.addEventListener('change', () => (newCard.hidden = useSaved())));
+  box.addEventListener('submit', async (e) => {
     e.preventDefault();
-    showError(form, '');
+    showError(box, '');
     let body;
     try {
-      body = useSaved() ? { useSavedCard: true } : readCardFields(form);
+      body = useSaved() ? { useSavedCard: true } : readCardFields(box);
     } catch (err) {
-      return showError(form, err.message);
+      return showError(box, err.message);
     }
-    const btn = $('[type=submit]', form);
+    const btn = $('[type=submit]', box);
     setBusy(btn, true, 'Processing payment…');
     try {
       await wait(1200); // stands in for the card network round trip
-      const { me: updated } = await api('/api/me/subscribe', { method: 'POST', body });
-      ctx.state.me = updated;
-      toast('Payment approved (demo)', 'ok');
-      ctx.go(ctx.homeFor(updated));
+      done((await api('/api/me/subscribe', { method: 'POST', body })).me, 'Payment approved (demo)');
     } catch (err) {
       setBusy(btn, false);
-      showError(form, err.message);
+      showError(box, err.message);
     }
   });
 }
@@ -463,6 +541,11 @@ export function card(ctx) {
     ${
       me.status === 'canceling'
         ? `<div class="notice">${icon('info')}<span>Your membership ends ${fmtDate(me.subscription.currentPeriodEnd)}. <a href="#/billing">Keep it</a></span></div>`
+        : ''
+    }
+    ${
+      me.status === 'past_due'
+        ? `<div class="notice warn">${icon('info')}<span>Your last payment didn't go through. <a href="#/billing">Update your card</a> to keep your membership.</span></div>`
         : ''
     }`;
 
@@ -643,34 +726,44 @@ export async function billing(ctx) {
   const [data, config] = await Promise.all([api('/api/me/billing'), ctx.refreshConfig()]);
   if (!ctx.isCurrent()) return;
   let me = (ctx.state.me = data.me);
-  const invoices = data.invoices;
+  let invoices = data.invoices;
   const box = $('#billing', main);
+  let card = null; // the Stripe card form, while it's open
 
   function draw() {
+    card?.destroy();
+    card = null;
     const sub = me.subscription;
     const pm = me.paymentMethod;
     const status = me.status;
+    const stripe = sub.provider === 'stripe';
+    const canEdit = stripe ? status !== 'canceled' : config.paymentMode === 'demo';
     box.innerHTML = `
       <section class="card">
         <div class="plan-top">
-          <div><h2>${esc(config.programName)}</h2><div class="plan-price">${money(sub.priceCents)} <span>/ month</span></div></div>
+          <div><h2>${esc(config.programName)}</h2><div class="plan-price">${money(sub.priceCents, sub.currency)} <span>${esc(per(sub))}</span></div></div>
           <span class="chip ${status}">${STATUS_LABEL[status]}</span>
         </div>
+        ${
+          status === 'past_due'
+            ? `<div class="notice warn">${icon('info')}<span>Your last payment didn't go through. Update your card below and we'll try again right away.</span></div>`
+            : ''
+        }
         <dl class="kv">
-          ${status === 'active' ? `<div><dt>Next payment</dt><dd>${fmtDate(sub.currentPeriodEnd)}</dd></div>` : ''}
+          ${['active', 'past_due'].includes(status) ? `<div><dt>Next payment</dt><dd>${fmtDate(sub.currentPeriodEnd)}</dd></div>` : ''}
           ${status === 'canceling' ? `<div><dt>Membership ends</dt><dd>${fmtDate(sub.currentPeriodEnd)}</dd></div>` : ''}
-          ${status === 'canceled' ? `<div><dt>Ended</dt><dd>${fmtDate(sub.endedAt)}</dd></div>` : ''}
+          ${status === 'canceled' && sub.endedAt ? `<div><dt>Ended</dt><dd>${fmtDate(sub.endedAt)}</dd></div>` : ''}
           <div><dt>Member since</dt><dd>${fmtDate(sub.startedAt)}</dd></div>
         </dl>
         <div class="actions">
-          ${status === 'active' ? '<button type="button" class="btn btn-danger-ghost btn-block" data-cancel>Cancel membership</button>' : ''}
+          ${['active', 'past_due'].includes(status) ? '<button type="button" class="btn btn-danger-ghost btn-block" data-cancel>Cancel membership</button>' : ''}
           ${
             status === 'canceling'
               ? `<div class="notice" style="margin:0">${icon('info')}<span>You'll keep your card and member offers until ${fmtDate(sub.currentPeriodEnd)}, and won't be charged again.</span></div>
                  <button type="button" class="btn btn-primary btn-block" data-resume>Keep my membership</button>`
               : ''
           }
-          ${status === 'canceled' ? `<a class="btn btn-primary btn-block" href="#/join">Rejoin for ${money(config.monthlyPriceCents)}/month</a>` : ''}
+          ${['canceled', 'none'].includes(status) ? `<a class="btn btn-primary btn-block" href="#/join">Rejoin for ${esc(priceLabel(config.price))}</a>` : ''}
         </div>
       </section>
 
@@ -679,16 +772,17 @@ export async function billing(ctx) {
         ${
           pm
             ? `<div class="pm" id="pm-row"><span class="pm-brand">${esc(pm.brand)}</span>
-                <div class="pm-main"><strong>${esc(pm.brand)} •••• ${esc(pm.last4)}</strong>
-                <span class="muted small">Expires ${String(pm.expMonth).padStart(2, '0')}/${String(pm.expYear).slice(-2)}</span></div>
-                ${config.demoMode ? '<button type="button" class="btn btn-secondary btn-sm" data-edit>Update</button>' : ''}</div>`
-            : '<p class="muted">No card on file.</p>'
+                <div class="pm-main"><strong>${esc(pm.brand)}${pm.last4 ? ` •••• ${esc(pm.last4)}` : ''}</strong>
+                ${pm.expMonth ? `<span class="muted small">Expires ${String(pm.expMonth).padStart(2, '0')}/${String(pm.expYear).slice(-2)}</span>` : ''}</div>
+                ${canEdit ? '<button type="button" class="btn btn-secondary btn-sm" data-edit>Update</button>' : ''}</div>`
+            : `<div class="pm" id="pm-row"><p class="muted" style="flex:1;margin:0">No card on file.</p>
+                ${canEdit ? '<button type="button" class="btn btn-secondary btn-sm" data-edit>Add a card</button>' : ''}</div>`
         }
         <form id="card-form" novalidate hidden style="margin-top:16px">
-          ${cardFields(me.name)}
+          ${stripe ? `${sub.mode === 'sandbox' ? SANDBOX_NOTE : ''}<div class="payment-element" id="card-element"></div>` : cardFields(me.name)}
           <p class="form-error" role="alert" hidden></p>
           <div class="btn-row"><button type="button" class="btn btn-secondary" data-close-edit>Cancel</button>
-          <button type="submit" class="btn btn-primary">Save card</button></div>
+          <button type="submit" class="btn btn-primary" ${stripe ? 'disabled' : ''}>Save card</button></div>
         </form>
       </section>
 
@@ -699,39 +793,74 @@ export async function billing(ctx) {
             ? `<ul class="list">${invoices
                 .map(
                   (i) => `<li><div><strong>${fmtDate(i.createdAt)}</strong><div class="sub">${esc(i.number)}${i.card ? ` · ${esc(i.card)}` : ''}</div></div>
-                    <div style="text-align:right"><div class="amount">${money(i.amountCents)}</div><div class="sub">Paid${i.demo ? ' · demo' : ''}</div></div></li>`
+                    <div style="text-align:right"><div class="amount">${money(i.amountCents)}</div><div class="sub">${
+                      i.receiptUrl ? `<a href="${esc(i.receiptUrl)}" target="_blank" rel="noopener">Receipt</a>` : 'Paid'
+                    }${i.mode === 'demo' ? ' · demo' : i.mode === 'sandbox' ? ' · test' : ''}</div></div></li>`
                 )
                 .join('')}</ul>`
             : '<p class="muted">No payments yet.</p>'
         }
       </section>
-      ${config.demoMode ? `<div class="notice demo">${icon('info')}<span><b>Demo mode.</b> No real charges are made.</span></div>` : ''}`;
-    wire();
+      ${!stripe && config.paymentMode === 'demo' ? `<div class="notice demo">${icon('info')}<span><b>Demo mode.</b> No real charges are made.</span></div>` : ''}`;
+    wire(stripe);
   }
 
-  function wire() {
+  function wire(stripe) {
     const form = $('#card-form', box);
-    wireCardFields(form);
-    $('[data-edit]', box)?.addEventListener('click', () => {
-      form.hidden = false;
-      $('#pm-row', box).hidden = true;
-      $('#cc-number', form).focus();
-    });
-    $('[data-close-edit]', box).addEventListener('click', () => {
+    const row = $('#pm-row', box);
+    if (!stripe) wireCardFields(form);
+    const close = () => {
+      card?.destroy();
+      card = null;
       form.hidden = true;
-      $('#pm-row', box).hidden = false;
+      row.hidden = false;
       showError(form, '');
+    };
+    $('[data-edit]', box)?.addEventListener('click', async () => {
+      form.hidden = false;
+      row.hidden = true;
+      if (!stripe) return $('#cc-number', form).focus();
+      try {
+        card = await cardForm($('#card-element', form), {
+          publishableKey: config.stripePublishableKey,
+          kind: 'setup',
+          currency: me.subscription.currency || 'usd',
+          name: me.name,
+          email: me.email,
+        });
+        if (form.hidden) return close();
+        $('[type=submit]', form).disabled = false;
+      } catch (err) {
+        showError(form, err.message);
+      }
     });
+    $('[data-close-edit]', box).addEventListener('click', close);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       showError(form, '');
+      const btn = $('[type=submit]', form);
+      if (stripe) {
+        setBusy(btn, true, 'Saving…');
+        try {
+          const setup = await card.pay(async () => (await api('/api/me/billing/card-setup', { method: 'POST' })).clientSecret, {
+            returnUrl: `${location.origin}/#/billing`,
+          });
+          me = ctx.state.me = (await api('/api/me/billing/payment-method', { method: 'POST', body: { setupIntentId: setup.id } })).me;
+          invoices = (await api('/api/me/billing')).invoices;
+          toast('Card updated', 'ok');
+          draw();
+        } catch (err) {
+          setBusy(btn, false);
+          showError(form, err.message);
+        }
+        return;
+      }
       let body;
       try {
         body = readCardFields(form);
       } catch (err) {
         return showError(form, err.message);
       }
-      const btn = $('[type=submit]', form);
       setBusy(btn, true, 'Saving…');
       try {
         await wait(800);
@@ -778,4 +907,5 @@ export async function billing(ctx) {
   }
 
   draw();
+  return () => card?.destroy();
 }
