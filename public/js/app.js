@@ -59,7 +59,9 @@ const ROUTES = {
   scan: { view: admin.verify, access: 'staff' },
   'new-member': { view: counter.newMember, access: 'staff' },
   password: { view: account.password, access: 'account' },
+  forgot: { view: account.forgot, access: 'guest' },
   claim: { view: account.claim, access: 'any' },
+  reset: { view: account.reset, access: 'any' },
 };
 
 const isActive = (me) => me && isActiveStatus(me.status);
@@ -82,7 +84,8 @@ function guard(name) {
   const def = ROUTES[name];
   const me = state.me;
   if (!def) return homeFor(me);
-  // A sign-up link works whoever is signed in on this phone (it signs them in as the new member).
+  // Sign-up and password reset links work whoever is signed in on this phone (they sign in
+  // the person the link is for).
   if (def.access === 'any') return name;
   if (me && me.mustChangePassword && name !== 'password') return 'password';
   switch (def.access) {

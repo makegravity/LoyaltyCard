@@ -25,7 +25,7 @@ const ROLES = ['Member', 'Cashier', 'Admin', 'Super admin'];
 // [what, member, cashier, admin, super admin]
 const PERMISSIONS = [
   ['Join, pay, add a selfie; see their card, offers and billing', 1, 0, 0, 0],
-  ['Change their own password', 1, 1, 1, 1],
+  ['Change their own password, or reset a forgotten one by email', 1, 1, 1, 1],
   ['Scan and check membership cards', 0, 1, 1, 1],
   ['Sign up new members at the counter (details, photo, payment, phone link)', 0, 1, 1, 1],
   ['Post and delete offers', 0, 0, 1, 1],
@@ -67,7 +67,8 @@ const TROUBLE = [
   ['"Membership not active"', 'Not paid, ended, or a demo or sandbox membership after going live. They can rejoin by signing in on their phone.'],
   ['"Payment due" on a member', "A renewal failed. The card keeps working while Stripe retries; when they update their card in Billing, it's charged straight away."],
   ['A photo is refused', 'The check found no face, a face too small, or a second person. Good light, face the camera, just them in the photo.'],
-  ['A member forgot their password', "Password reset by email isn't built yet. For now, a member who can't sign in can't be helped from the app."],
+  ['Someone forgot their password', 'They tap "Forgot password?" on the sign-in page and get a link by email. It works once, for an hour.'],
+  ['The reset email never arrives', "Check the spam or junk folder, and that they typed the email they signed up with. If nobody's reset emails arrive, the server's email settings (FORGOT_EMAIL) need a look. Staff can also get a new temporary password in Staff."],
   ["A counter member's phone link expired", 'Members → find them → New link for their phone. This works until they have opened their card once.'],
   ['"Confirm your password to change payments"', 'The 10-minute unlock on Payments ran out. Unlock again.'],
   ['"…publishable keys start with pk_test_" (or similar)', 'The key is for the other mode, or the two keys were swapped. Copy them again from the right place in Stripe.'],
@@ -160,6 +161,7 @@ export function docs(ctx) {
           <li>New staff get a temporary password, shown once, to pass on. At first sign-in they must choose their own: 8 characters or more, like every password.</li>
           <li>Only a super admin can add, reset or remove a super admin. Nobody can remove themselves, so there is always a super admin.</li>
           <li>Removing someone, or giving them a new password, signs them out everywhere at once.</li>
+          <li>Anyone who forgets their password, staff included, can tap <b>Forgot password?</b> on the sign-in page. A link to choose a new one goes to their email; it works once, for an hour, and signs them out everywhere else.</li>
         </ul>`
       )}
     </section>
@@ -236,7 +238,8 @@ export function docs(ctx) {
       )}
       ${card(
         'Someone forgot their staff password',
-        steps(['Menu → <b>Staff</b> → their row → <b>New password</b>.', 'Pass on the new temporary password. They choose their own at sign-in.'])
+        `<p>They can tap <b>Forgot password?</b> on the sign-in page and get a link by email. Or, if their email isn't working:</p>
+        ${steps(['Menu → <b>Staff</b> → their row → <b>New password</b>.', 'Pass on the new temporary password. They choose their own at sign-in.'])}`
       )}
       ${card(
         'Sign up a customer at the counter',

@@ -989,3 +989,6 @@ a.drawer-signout { text-decoration: none; }
 .matrix .yes { color: var(--green); display: inline-flex; }
 .matrix .yes .icon { width: 18px; height: 18px; }
 .matrix .no { color: #b8c0c8; font-weight: 700; }
+
+/* Forgot password */
+.forgot-link { justify-self: end; font-size: 0.88rem; font-weight: 800; text-decoration: none; padding: 4px 2px; }

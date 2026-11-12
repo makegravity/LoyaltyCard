@@ -16,6 +16,7 @@
     "express": "^4.21.2",
     "jpeg-js": "0.4.4",
     "mysql2": "^3.24.6",
+    "nodemailer": "10.2.1",
     "onnxruntime-web": "1.30.0",
     "pngjs": "7.0.0",
     "qrcode": "^1.5.4",

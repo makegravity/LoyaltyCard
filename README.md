@@ -50,6 +50,8 @@ To bring in data from the JSON prototype (`data/db.json` and `data/uploads`), st
 | `TRUST_PROXY` | off | Behind a reverse proxy, which proxies to trust (Express `trust proxy`, e.g. `uniquelocal`) |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `admin@binmania.local` and a generated password | The first account (a super admin), made when the database has none. Required in production |
 | `SECRETS_KEY` | derived from the database | 64 hex characters (`openssl rand -hex 32`) that encrypt the Stripe keys saved in Payments. Required in production |
+| `FORGOT_EMAIL`, `FORGOT_EMAIL_APP_PASSWORD` | off | The mailbox that sends password reset links, and its password. For Gmail, an [app password](https://myaccount.google.com/apppasswords) (needs 2-Step Verification). Without them, "Forgot password?" doesn't show |
+| `SMTP_HOST`, `SMTP_PORT` | `smtp.gmail.com`, `465` | Only for a mail provider other than Gmail. Port 465 is TLS from the start; other ports must offer STARTTLS in production |
 | `PORT`, `HOST` | `4090`, `0.0.0.0` | Where the server listens |
 
 ## Logins and roles
@@ -66,6 +68,8 @@ Everyone signs in on the same page and lands where their role belongs.
 **Admin → Staff** adds staff and shows a temporary password once, to pass on. At their first sign-in they must choose their own (8+ characters, like every password) before they can do anything else. The same page makes a new temporary password for someone who forgot theirs, or removes them. Both sign the person out everywhere at once. Only a super admin can add, reset or remove a super admin, and nobody can remove themselves. If there is ever no super admin, the longest-serving admin becomes one when the app starts.
 
 Anyone signed in can change their password from the menu, which signs them out on their other devices.
+
+**Forgot password?** on the sign-in page works for everyone, members and staff. They enter their email and get a link (from `FORGOT_EMAIL`) to choose a new password. The link works once, for an hour; using it signs them in there and out everywhere else, and clears a staff member's temporary password. The page says the same thing whether or not the email has an account. The server logs at start whether it could sign in to the mailbox.
 
 ## What a member sees
 
@@ -156,14 +160,15 @@ The response:
 
 - **Sessions** are random tokens in an HttpOnly, SameSite=Lax cookie; the database keeps only a hash. In production the cookie is `__Host-` prefixed and Secure. Sign-out ends the session on the server. Staff sessions last 12 hours, members' 30 days.
 - **Passwords** are hashed with scrypt (N=2^14, r=8, p=5). Older hashes are upgraded when the person signs in. Sign-in takes the same time whether or not the email has an account.
-- **Limits**: 10 wrong passwords per email and address, and 50 sign-ins per address, every 15 minutes; 20 sign-ups per address per hour; 10 password-change attempts per person per 15 minutes. They are counted in memory, which suits one app container.
+- **Limits**: 10 wrong passwords per email and address, and 50 sign-ins per address, every 15 minutes; 20 sign-ups per address per hour; 10 password-change attempts per person per 15 minutes; 3 reset emails per email address and 20 per address per hour. They are counted in memory, which suits one app container.
+- **Password reset links** are single-use 256-bit tokens, stored hashed, that expire after an hour. Asking for one gets the same answer whether or not the email has an account, without waiting for the email to go. The link is in the page's `#` part, so it never reaches server logs or other sites. Changing a password cancels any reset links still out.
 - **Cross-site requests**: every write must carry this site's own `Origin` (`PUBLIC_ORIGIN` in production), on top of SameSite cookies.
 - **Headers**: a strict Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff`, same-origin opener and resource policies, `no-store` on every API response. HSTS is set by Caddy.
 - **Uploads**: photos are checked to really be JPEG, PNG or WebP, up to 4 MB. Only the upload routes accept bodies over 64 KB.
 - **Card photos** (member selfies and counter photos) must show one clear face: `lib/faces.js` runs the UltraFace detector (`models/`, MIT licence) on the server in about 60–150 ms, and refuses a photo with no face, a face too small to recognise, or a second person just as clear. The counter checks the photo as soon as it's taken. If the detector itself fails, photos are let through and the failure is logged.
 - **Payments**: card details go straight from the browser to Stripe. Stripe keys are encrypted at rest; changing them, the plan or the mode needs a fresh password confirmation. Webhooks are accepted only with a valid Stripe signature, and every event is checked by fetching the subscription from Stripe. Counter sign-up links are single-use 256-bit tokens, stored hashed.
 - **Database**: every change to a member's billing, photo or scans locks their row, so two requests at once can't renew a period twice or accept a code twice. The app's MySQL user needs rights on its own database only.
-- **Audit log**: sign-ins (and failed ones), sign-outs, password changes, staff changes, settings changes, Stripe key, plan and mode changes, sign-ups and payments, counter sign-ups and links, POS keys, offers, selfie resets and every code check (who, what, when, from where) go to the `audit_log` table.
+- **Audit log**: sign-ins (and failed ones), sign-outs, password changes, reset emails asked for and used, staff changes, settings changes, Stripe key, plan and mode changes, sign-ups and payments, counter sign-ups and links, POS keys, offers, selfie resets and every code check (who, what, when, from where) go to the `audit_log` table.
 - **Production checks**: with `NODE_ENV=production` the server refuses to start without an https `PUBLIC_ORIGIN`, a database password and `SECRETS_KEY`. The first account must come from `ADMIN_EMAIL`/`ADMIN_PASSWORD` and must choose a new password at first sign-in.
 
 ## Deploy
@@ -219,5 +224,5 @@ Only the app container is rebuilt and restarted, in a few seconds. Database chan
 ## Not done yet
 
 - **Card payments in person** (Stripe Terminal). At the counter the customer types their card on the register's screen.
-- **Password reset by email** for members, and email receipts. Staff passwords are reset by an admin.
+- **Email receipts** (Stripe's receipts show in Billing).
 - **Off-site backup copies** and uptime monitoring.

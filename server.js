@@ -12,6 +12,7 @@ const pass = require('./lib/pass');
 const billing = require('./lib/billing');
 const payments = require('./lib/payments');
 const faces = require('./lib/faces');
+const mail = require('./lib/mail');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT || 4090);
@@ -38,6 +39,8 @@ const STRIPE_MODES = ['sandbox', 'live'];
 const ELEVATED_MS = 10 * 60e3;
 // How long a counter sign-up's link to open the card on the member's phone works.
 const CLAIM_LINK_HOURS = 24;
+// How long the link in a password reset email works.
+const RESET_LINK_MINUTES = 60;
 // Encrypts the Stripe keys in the database: 64 hex characters (openssl rand -hex 32).
 const SECRETS_KEY = process.env.SECRETS_KEY || '';
 
@@ -272,6 +275,9 @@ const loginByIpAndEmail = limiter(10, 15 * 60e3);
 const loginByIp = limiter(50, 15 * 60e3);
 const signupByIp = limiter(20, 60 * 60e3);
 const claimsByIp = limiter(30, 15 * 60e3);
+const resetEmailsByIp = limiter(20, 60 * 60e3);
+const resetEmailsByAddress = limiter(3, 60 * 60e3);
+const resetsByIp = limiter(30, 15 * 60e3);
 const counterSignupsByUser = limiter(60, 60 * 60e3);
 const passwordChecksByUser = limiter(10, 15 * 60e3);
 const posKeyFailuresByIp = limiter(20, 15 * 60e3);
@@ -451,6 +457,7 @@ async function publicConfig(s) {
     paymentMode: s.paymentMode,
     stripePublishableKey: STRIPE_MODES.includes(s.paymentMode) ? await payments.publishableKey(s.paymentMode) : null,
     qrPeriodSeconds: s.qrPeriodSeconds,
+    passwordReset: mail.enabled(),
   };
 }
 
@@ -625,6 +632,77 @@ app.post('/api/auth/claim', h(async (req, res) => {
   res.json({ me: meView(fresh, req.settings.paymentMode) });
 }));
 
+// Forgotten passwords, for members and staff alike: a link by email, which works once. The
+// answer is the same whether or not the email has an account.
+app.post('/api/auth/forgot', h(async (req, res) => {
+  if (!mail.enabled()) return fail(res, 503, "Password reset by email isn't set up yet. Ask at the register.");
+  const email = cleanText(req.body.email, 120).toLowerCase();
+  if (!EMAIL_RE.test(email)) return fail(res, 400, 'Please enter a valid email address.');
+  const overIp = resetEmailsByIp.hit(req.ip);
+  if (resetEmailsByAddress.hit(email) || overIp) return fail(res, 429, 'Too many reset emails. Try again in an hour.');
+  const user = await data.userByEmail(email);
+  if (!user) {
+    await audit(req, 'password_reset_asked', { target: email, detail: 'no account' });
+    return res.json({ ok: true });
+  }
+  const token = security.newToken();
+  const expiresAt = new Date(Date.now() + RESET_LINK_MINUTES * 60e3);
+  await data.createPasswordReset({ tokenHash: security.sha256(token), userId: user.id, expiresAt });
+  const message = mail.passwordResetMessage({
+    programName: req.settings.programName,
+    name: user.name,
+    email: user.email,
+    link: `${baseUrl(req)}/#/reset?t=${token}`,
+    minutes: RESET_LINK_MINUTES,
+  });
+  // Not awaited, so the answer doesn't take longer when the email has an account.
+  mail.send({ to: user.email, ...message }).catch((err) => console.error(`Password reset email to ${user.email} failed: ${err.message}`));
+  await audit(req, 'password_reset_asked', { actor: user, target: user.email });
+  res.json({ ok: true });
+}));
+
+async function resetUser(req, res) {
+  if (resetsByIp.hit(req.ip)) {
+    fail(res, 429, 'Too many tries. Wait 15 minutes and try again.');
+    return {};
+  }
+  const token = String(req.body.token || '');
+  const tokenHash = /^[A-Za-z0-9_-]{43}$/.test(token) ? security.sha256(token) : null;
+  const user = tokenHash ? await data.passwordResetUser(tokenHash) : null;
+  if (!user) fail(res, 410, 'This link has expired or was already used. Ask for a new one.');
+  return { user, tokenHash };
+}
+
+app.post('/api/auth/reset/check', h(async (req, res) => {
+  const { user } = await resetUser(req, res);
+  if (user) res.json({ name: user.name, email: user.email, passwordMinLength: MIN_PASSWORD[user.role] });
+}));
+
+// The new password signs them in here and out everywhere else.
+app.post('/api/auth/reset', h(async (req, res) => {
+  const { user, tokenHash } = await resetUser(req, res);
+  if (!user) return;
+  const password = String(req.body.password || '');
+  const problem = passwordProblem(password, user.role);
+  if (problem) return fail(res, 400, problem);
+  if (!(await data.takePasswordReset(tokenHash))) return fail(res, 410, 'This link has expired or was already used. Ask for a new one.');
+  const now = new Date().toISOString();
+  await data.updateUser(user.id, {
+    passwordHash: await security.hashPassword(password),
+    mustChangePassword: false,
+    passwordChangedAt: now,
+    lastLoginAt: now,
+  });
+  await data.deletePasswordResets(user.id);
+  await data.deleteClaimLinks(user.id);
+  await data.deleteUserSessions(user.id);
+  let fresh = await data.userById(user.id);
+  if (fresh.role === 'member') fresh = await settleUser(fresh);
+  await startSession(req, res, fresh);
+  await audit(req, 'password_reset', { actor: fresh });
+  res.json({ me: meView(fresh, req.settings.paymentMode) });
+}));
+
 app.get('/api/me', h(async (req, res) => {
   if (!req.user) return res.json({ me: null });
   const user = req.user.role === 'member' ? await settleUser(req.user) : req.user;
@@ -650,6 +728,7 @@ app.post('/api/me/password', h(async (req, res) => {
     passwordChangedAt: new Date().toISOString(),
   });
   await data.deleteUserSessions(user.id, req.sessionHash);
+  await data.deletePasswordResets(user.id);
   passwordChecksByUser.reset(user.id);
   await audit(req, 'password_changed');
   res.json({ me: meView(await data.userById(user.id), req.settings.paymentMode) });
@@ -1440,6 +1519,14 @@ async function main() {
   await ensureSuperAdmin();
   // Load the face detector now, so the first selfie isn't slow.
   faces.warmUp().catch((err) => console.error(`Face detector didn't load: ${err.message}`));
+  if (mail.enabled()) {
+    mail
+      .check()
+      .then((from) => console.log(`Password reset emails come from ${from}.`))
+      .catch((err) => console.error(`Password reset emails can't be sent: ${err.message}`));
+  } else {
+    console.log('Password reset by email is off: set FORGOT_EMAIL and FORGOT_EMAIL_APP_PASSWORD to turn it on.');
+  }
 
   const server = app.listen(PORT, HOST, () => {
     console.log(`Bin Mania membership${PROD ? '' : ' (development)'}: http://localhost:${PORT}`);

@@ -124,13 +124,18 @@ export function login(ctx) {
         <input id="email" name="email" type="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" required></div>
       <div class="field"><label for="password">Password</label>
         <div class="input-wrap"><input id="password" name="password" type="password" autocomplete="current-password" required>
-        <button type="button" class="input-tail" data-toggle-pw>Show</button></div></div>
+        <button type="button" class="input-tail" data-toggle-pw>Show</button></div>
+        ${ctx.state.config.passwordReset ? '<a class="forgot-link" href="#/forgot" data-forgot>Forgot password?</a>' : ''}</div>
       <p class="form-error" role="alert" hidden></p>
       <button class="btn btn-primary btn-block" type="submit">Sign in</button>
     </form>
     <p class="switch-auth">New here? <a href="#/signup">Become a member</a></p>`;
   passwordToggle(main);
   const form = $('form', main);
+  // The forgot-password page starts with the email typed here.
+  main.querySelector('[data-forgot]')?.addEventListener('click', () => {
+    ctx.state.forgotEmail = form.email.value.trim();
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     showError(form, '');
